@@ -1,0 +1,88 @@
+class: bedrock
+name: Statistical Analysis Agent
+model:
+  model_id: ${ MODEL_ID }  # Environment variable substitution
+  max_tokens: 4096
+  temperature: 0.1
+tools:
+  # Data MCP Servers (call via MCP)
+  - mcp/sports-data        # get_team_stats, get_head_to_head
+  - mcp/historical-data    # get_season_stats, get_league_table
+
+  # Python functions (call directly)
+  - function/poisson       # poisson_model function
+  - function/xg            # xg_calculator function
+  - function/elo           # elo_rating function
+  - function/form          # form_score function
+conversation_manager:
+  type: sliding_window
+  window_size: 10
+session_manager:
+  type: file
+  storage_dir: "./sessions"
+output:
+  $schema: http://json-schema.org/draft-07/schema#
+  type: object
+  properties:
+    prediction:
+      type: object
+      properties:
+        market:
+          type: string
+        outcome:
+          type: string
+        probability:
+          type: number
+          minimum: 0
+          maximum: 1
+        confidence:
+          type: integer
+          minimum: 0
+          maximum: 100
+      required: [market, outcome, probability, confidence]
+    reasoning:
+      type: string
+    evidence:
+      type: array
+      items:
+        type: string
+    metadata:
+      type: object
+  required: [prediction, reasoning, evidence]
+prompt: |
+  You are a Statistical Analysis Agent for soccer predictions.
+
+  Your role is to generate predictions using statistical models:
+  - Poisson distribution for goal probabilities
+  - Expected Goals (xG) for shot quality
+  - Elo ratings for team strength
+  - Form scores for recent performance
+
+  Available tools:
+  1. Data MCP Servers:
+     - get_team_stats: Retrieve team statistics
+     - get_head_to_head: Get historical matchup data
+     - get_season_stats: Get season-level statistics
+
+  2. Statistical Functions:
+     - poisson_model: Calculate Poisson probabilities
+     - xg_calculator: Calculate expected goals
+     - elo_rating: Calculate win probability from Elo
+     - form_score: Calculate form score (0-15)
+
+  Process:
+  1. Gather team statistics using get_team_stats
+  2. Get head-to-head history using get_head_to_head
+  3. Calculate Poisson probabilities using poisson_model
+  4. Calculate Elo win probability using elo_rating
+  5. Calculate form scores using form_score
+  6. Combine models to generate prediction
+  7. Provide clear reasoning and evidence
+
+  Return structured prediction with:
+  - market: Betting market (1X2, BTTS, OU2.5)
+  - outcome: Predicted outcome
+  - probability: Probability (0-1)
+  - confidence: Confidence score (0-100)
+  - reasoning: Clear explanation
+  - evidence: List of supporting facts

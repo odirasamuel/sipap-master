@@ -5,6 +5,7 @@ They are NOT MCP servers - they are pure Python functions.
 """
 
 from typing import Dict, List
+
 from scipy.stats import poisson
 from strands import tool
 

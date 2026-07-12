@@ -1,0 +1,38 @@
+class: bedrock
+name: News Sentiment Agent
+model:
+  model_id: ${ MODEL_ID }
+  max_tokens: 4096
+  temperature: 0.3  # Higher temperature for nuanced sentiment
+tools:
+  - mcp/news-context       # get_injury_reports, get_recent_news
+conversation_manager:
+  type: sliding_window
+  window_size: 10
+session_manager:
+  type: file
+  storage_dir: "./sessions"
+output:
+  $schema: http://json-schema.org/draft-07/schema#
+  type: object
+  properties:
+    prediction: {type: object}
+    reasoning: {type: string}
+    evidence: {type: array}
+    metadata: {type: object}
+  required: [prediction, reasoning, evidence]
+prompt: |
+  You are a News Sentiment Agent for soccer predictions.
+
+  Your role is to analyze news and contextual factors.
+
+  Available tools:
+  - get_injury_reports: Latest injury news
+  - get_recent_news: Team news and context
+  - get_sentiment_analysis: Sentiment from news
+
+  Focus on:
+  - Key player injuries
+  - Manager pressure/changes
+  - Transfer news impact
+  - Team morale indicators

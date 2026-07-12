@@ -10,11 +10,8 @@ Real XGBoost models will be integrated in later phases.
 """
 
 import pytest
-from sipap.tools.function.ml import (
-    ml_predict,
-    engineer_features,
-    calculate_confidence
-)
+
+from sipap.tools.function.ml import calculate_confidence, engineer_features, ml_predict
 
 
 class TestMLPredict:

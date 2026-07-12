@@ -1,0 +1,40 @@
+class: bedrock
+name: Form Analysis Agent
+model:
+  model_id: ${ MODEL_ID }
+  max_tokens: 4096
+  temperature: 0.1
+tools:
+  - mcp/sports-data
+  - mcp/historical-data
+  - function/form
+conversation_manager:
+  type: sliding_window
+  window_size: 10
+session_manager:
+  type: file
+  storage_dir: "./sessions"
+output:
+  $schema: http://json-schema.org/draft-07/schema#
+  type: object
+  properties:
+    prediction: {type: object}
+    reasoning: {type: string}
+    evidence: {type: array}
+    metadata: {type: object}
+  required: [prediction, reasoning, evidence]
+prompt: |
+  You are a Form Analysis Agent for soccer predictions.
+
+  Your role is to analyze recent team form and momentum.
+
+  Available tools:
+  - get_recent_form: Get last 5 matches
+  - form_score: Calculate weighted form score
+
+  Focus on:
+  - Recent results (last 5 matches)
+  - Home vs away form
+  - Momentum (trending up/down)
+  - Injury impact
+  - Manager pressure

@@ -6,13 +6,7 @@ Following TDD methodology:
 3. REFACTOR: Improve implementation
 """
 
-import pytest
-from sipap.tools.function.statistical import (
-    poisson_model,
-    xg_calculator,
-    elo_rating,
-    form_score
-)
+from sipap.tools.function.statistical import elo_rating, form_score, poisson_model, xg_calculator
 
 
 class TestPoissonModel:
