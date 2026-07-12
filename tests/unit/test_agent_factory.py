@@ -7,7 +7,6 @@ Following TDD methodology:
 """
 
 import os
-from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
@@ -69,7 +68,6 @@ prompt: "You are a test agent for ${ SPORT }."
 
     def test_factory_config_path_exists(self, factory):
         """Test factory has correct config path."""
-        expected_path = Path(__file__).parent.parent.parent / "sipap" / "sports" / "soccer" / "agents"
         # Path may not exist yet, just verify it's constructed correctly
         assert "soccer" in str(factory.config_path)
         assert "agents" in str(factory.config_path)
@@ -88,7 +86,7 @@ prompt: "You are a test agent for ${ SPORT }."
         factory.config_path = tmp_path
 
         # Create agent
-        agent = factory.create("test_agent", tools=[])
+        _ = factory.create("test_agent", tools=[])
 
         # Verify Agent was instantiated
         mock_agent_class.assert_called_once()
@@ -101,7 +99,7 @@ prompt: "You are a test agent for ${ SPORT }."
         factory.config_path = tmp_path
 
         # Create agent
-        agent = factory.create("test_agent_env", tools=[])
+        _ = factory.create("test_agent_env", tools=[])
 
         # Verify Agent was called (template processing happened)
         mock_agent_class.assert_called_once()
@@ -120,20 +118,22 @@ prompt: "You are a test agent for ${ SPORT }."
 
         mock_tools = [Mock(), Mock()]
 
-        agent = factory.create("test_agent", tools=mock_tools)
+        _ = factory.create("test_agent", tools=mock_tools)
 
         # Verify tools were passed
         call_kwargs = mock_agent_class.call_args[1]
         assert call_kwargs["tools"] == mock_tools
 
+    @patch("strands.models.BedrockModel")
     @patch("sipap.factory.agent.Agent")
-    def test_create_sets_temperature_from_config(self, mock_agent_class, factory, simple_agent_config, tmp_path):
+    def test_create_sets_temperature_from_config(self, mock_agent_class, mock_bedrock_model, factory, simple_agent_config, tmp_path):
         """Test create sets temperature from YAML config."""
         factory.config_path = tmp_path
 
-        agent = factory.create("test_agent", tools=[])
+        _ = factory.create("test_agent", tools=[])
 
-        call_kwargs = mock_agent_class.call_args[1]
+        # Verify temperature was passed to BedrockModel
+        call_kwargs = mock_bedrock_model.call_args[1]
         assert call_kwargs["temperature"] == 0.1
 
     @pytest.fixture
@@ -175,7 +175,7 @@ prompt: "You are a test agent for ${ SPORT }."
         """Test create handles structured output schema."""
         factory.config_path = tmp_path
 
-        agent = factory.create("test_agent_output", tools=[])
+        _ = factory.create("test_agent_output", tools=[])
 
         # Verify Agent was called with structured_output_model
         call_kwargs = mock_agent_class.call_args[1]

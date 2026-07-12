@@ -46,7 +46,7 @@ class AgentToolFactory:
         # Agent config base path
         self.config_path = Path(__file__).parent.parent / "sports" / sport / "agents"
 
-    def create(self, agent_name: str, tools: list) -> Agent:
+    def create(self, agent_name: str, tools: list[Any]) -> Agent:
         """Create Strands Agent instance from YAML config.
 
         Args:
@@ -86,7 +86,6 @@ class AgentToolFactory:
             model=model,
             system_prompt=config["prompt"],
             tools=tools,  # MCP servers + Python functions
-            temperature=config["model"].get("temperature", 0.1),
             structured_output_model=structured_output_model
         )
 
@@ -109,7 +108,7 @@ class AgentToolFactory:
         template = self._jinja_env.from_string(template_str)
         return template.render(**os.environ)
 
-    def _create_model(self, model_config: dict) -> Any:
+    def _create_model(self, model_config: dict[str, Any]) -> Any:
         """Create Bedrock model instance.
 
         Args:
@@ -122,10 +121,11 @@ class AgentToolFactory:
 
         return BedrockModel(
             model_id=model_config["model_id"],
-            max_tokens=model_config.get("max_tokens", 4096)
+            max_tokens=model_config.get("max_tokens", 4096),
+            temperature=model_config.get("temperature", 0.1)
         )
 
-    def _create_output_model(self, output_schema: dict) -> BaseModel | None:
+    def _create_output_model(self, output_schema: dict[str, Any]) -> type[BaseModel] | None:
         """Convert JSON Schema to Pydantic model.
 
         Args:
@@ -151,14 +151,14 @@ class AgentToolFactory:
             if field_name in required_fields:
                 field_definitions[field_name] = (python_type, ...)
             else:
-                field_definitions[field_name] = (python_type | None, None)
+                field_definitions[field_name] = (python_type | None, None)  # type: ignore[assignment]
 
         # Create Pydantic model dynamically
-        model = create_model("AgentOutput", **field_definitions)
+        model = create_model("AgentOutput", **field_definitions)  # type: ignore[call-overload]
 
-        return model
+        return model  # type: ignore[no-any-return]
 
-    def _json_type_to_python(self, field_schema: dict) -> type:
+    def _json_type_to_python(self, field_schema: dict[str, Any]) -> type:
         """Map JSON Schema type to Python type.
 
         Args:

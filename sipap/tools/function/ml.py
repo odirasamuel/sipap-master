@@ -7,13 +7,13 @@ This provides the same interface but uses deterministic rules
 instead of trained models for testing purposes.
 """
 
-from typing import Dict, List
+from typing import Any
 
 from strands import tool
 
 
 @tool
-def ml_predict(context: Dict, market: str = "1X2", model_version: str = "v2.1") -> dict:
+def ml_predict(context: dict[str, Any], market: str = "1X2", model_version: str = "v2.1") -> dict[str, Any]:
     """
     ML model prediction (simplified implementation).
 
@@ -55,7 +55,7 @@ def ml_predict(context: Dict, market: str = "1X2", model_version: str = "v2.1") 
     }
 
 
-def engineer_features(context: Dict) -> List[float]:
+def engineer_features(context: dict[str, Any]) -> list[float]:
     """
     Extract features from context.
 
@@ -81,7 +81,7 @@ def engineer_features(context: Dict) -> List[float]:
     ]
 
 
-def calculate_confidence(probabilities: List[float]) -> float:
+def calculate_confidence(probabilities: list[float]) -> float:
     """
     Calculate confidence from probability distribution.
 

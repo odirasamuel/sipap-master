@@ -4,14 +4,14 @@ These are @tool decorated functions that agents can call.
 They are NOT MCP servers - they are pure Python functions.
 """
 
-from typing import Dict, List
+from typing import Any
 
-from scipy.stats import poisson
+from scipy.stats import poisson  # type: ignore[import-untyped]
 from strands import tool
 
 
 @tool
-def poisson_model(home_avg_goals: float, away_avg_goals: float, league_avg_goals: float = 1.5) -> dict:
+def poisson_model(home_avg_goals: float, away_avg_goals: float, league_avg_goals: float = 1.5) -> dict[str, Any]:
     """
     Calculate match outcome probabilities using Poisson distribution.
 
@@ -53,7 +53,7 @@ def poisson_model(home_avg_goals: float, away_avg_goals: float, league_avg_goals
 
 
 @tool
-def xg_calculator(shots: List[Dict], league_avg_conversion: float = 0.10) -> float:
+def xg_calculator(shots: list[dict[str, Any]], league_avg_conversion: float = 0.10) -> float:
     """
     Calculate expected goals from shot data.
 
@@ -87,7 +87,7 @@ def xg_calculator(shots: List[Dict], league_avg_conversion: float = 0.10) -> flo
 
 
 @tool
-def elo_rating(team_elo: int, opponent_elo: int) -> dict:
+def elo_rating(team_elo: int, opponent_elo: int) -> dict[str, Any]:
     """
     Calculate win probability based on Elo ratings.
 
@@ -110,7 +110,7 @@ def elo_rating(team_elo: int, opponent_elo: int) -> dict:
 
 
 @tool
-def form_score(recent_results: List[str]) -> dict:
+def form_score(recent_results: list[str]) -> dict[str, Any]:
     """
     Calculate form score from recent results.
 
@@ -125,7 +125,7 @@ def form_score(recent_results: List[str]) -> dict:
 
     # Weight recent matches more (exponential decay)
     weights = [2.0, 1.5, 1.2, 1.0, 0.8]
-    weighted_points = sum(p * w for p, w in zip(points, weights[:len(points)]))
+    weighted_points = sum(p * w for p, w in zip(points, weights[:len(points)], strict=False))
     max_points = sum(3 * w for w in weights[:len(points)])
 
     form_score_value = (weighted_points / max_points) * 15  # Scale to 0-15

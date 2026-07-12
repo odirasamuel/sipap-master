@@ -9,7 +9,7 @@ Full MCP integration and async execution will be added in later phases.
 import logging
 import statistics
 from collections import Counter
-from typing import List, Optional
+from typing import Any
 
 from sipap.factory.agent import AgentToolFactory
 
@@ -28,7 +28,7 @@ class SoccerOrchestrator:
     This is a simplified implementation focusing on ensemble logic and quality gates.
     """
 
-    def __init__(self, logger: Optional[logging.Logger] = None):
+    def __init__(self, logger: logging.Logger | None = None):
         """
         Initialize the orchestrator.
 
@@ -42,7 +42,7 @@ class SoccerOrchestrator:
 
         self.logger.info("SoccerOrchestrator initialized")
 
-    def _calculate_ensemble(self, agent_predictions: List[dict], market: str) -> dict:
+    def _calculate_ensemble(self, agent_predictions: list[dict[str, Any]], market: str) -> dict[str, Any]:
         """
         Calculate weighted ensemble from all agent predictions.
 
@@ -83,7 +83,7 @@ class SoccerOrchestrator:
             "evidence": self._aggregate_evidence(agent_predictions)
         }
 
-    def _calculate_agreement(self, predictions: List[dict]) -> float:
+    def _calculate_agreement(self, predictions: list[dict[str, Any]]) -> float:
         """
         Calculate confidence from agent agreement.
 
@@ -106,7 +106,7 @@ class SoccerOrchestrator:
 
         return max(0, min(100, confidence))
 
-    def _select_outcome(self, predictions: List[dict]) -> str:
+    def _select_outcome(self, predictions: list[dict[str, Any]]) -> str:
         """
         Select most common outcome from agents (majority vote).
 
@@ -117,9 +117,10 @@ class SoccerOrchestrator:
             Most common outcome
         """
         outcomes = [p["prediction"]["outcome"] for p in predictions]
-        return Counter(outcomes).most_common(1)[0][0]
+        most_common = Counter(outcomes).most_common(1)
+        return str(most_common[0][0]) if most_common else ""
 
-    def _generate_reasoning(self, predictions: List[dict]) -> str:
+    def _generate_reasoning(self, predictions: list[dict[str, Any]]) -> str:
         """
         Aggregate reasoning from all agents.
 
@@ -132,7 +133,7 @@ class SoccerOrchestrator:
         reasons = [f"{p['agent']}: {p['reasoning']}" for p in predictions]
         return " | ".join(reasons)
 
-    def _aggregate_evidence(self, predictions: List[dict]) -> List[str]:
+    def _aggregate_evidence(self, predictions: list[dict[str, Any]]) -> list[str]:
         """
         Aggregate evidence from all agents.
 
@@ -147,7 +148,7 @@ class SoccerOrchestrator:
             evidence.extend(p.get("evidence", []))
         return evidence
 
-    def _apply_quality_gates(self, ensemble: dict, agent_predictions: List[dict]) -> dict:
+    def _apply_quality_gates(self, ensemble: dict[str, Any], agent_predictions: list[dict[str, Any]]) -> dict[str, Any]:
         """
         Apply quality gates to final prediction.
 
