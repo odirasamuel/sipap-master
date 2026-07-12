@@ -1,0 +1,93 @@
+# MCP Server Registry
+#
+# This file defines all MCP server endpoints used by sipap-master.
+# Environment: ${ENV} determines which endpoints to use (dev, staging, prod)
+#
+# Usage:
+#   - Local development: Use localhost endpoints
+#   - AWS development: Use dev ELB endpoints
+#   - Production: Use production ELB endpoints
+
+# Environment configuration
+environment: ${ENV:-dev}  # Default to dev if ENV not set
+
+# MCP Server Endpoints
+mcp_servers:
+  # Data Layer MCP - Sports data, odds, historical stats
+  data:
+    name: "sipap-data-mcp"
+    description: "Sports data, odds, and historical statistics"
+    endpoints:
+      local: "http://localhost:8001"
+      dev: "http://sipap-data-mcp-dev.us-east-1.elb.amazonaws.com"
+      staging: "http://sipap-data-mcp-staging.us-east-1.elb.amazonaws.com"
+      prod: "http://sipap-data-mcp.us-east-1.elb.amazonaws.com"
+    timeout: 5.0
+    retry:
+      max_attempts: 3
+      backoff_factor: 0.5
+    tools:
+      - get_match_schedule
+      - get_team_stats
+      - get_league_table
+      - get_head_to_head
+      - get_match_odds
+      - track_odds_movement
+      - get_recent_form
+      - get_season_stats
+
+  # Intelligence Layer MCP - News and weather intelligence
+  intelligence:
+    name: "sipap-intelligence-mcp"
+    description: "AI-powered news sentiment and weather intelligence"
+    endpoints:
+      local: "http://localhost:8002"
+      dev: "http://sipap-intelligence-mcp-dev.us-east-1.elb.amazonaws.com"
+      staging: "http://sipap-intelligence-mcp-staging.us-east-1.elb.amazonaws.com"
+      prod: "http://sipap-intelligence-mcp.us-east-1.elb.amazonaws.com"
+    timeout: 10.0  # Higher timeout for AI processing
+    retry:
+      max_attempts: 2
+      backoff_factor: 1.0
+    tools:
+      - get_match_weather
+      - assess_weather_impact
+      - get_historical_weather_performance
+      - analyze_team_news
+      - get_injury_reports
+
+# Tool-to-MCP mapping
+# Maps tool names to MCP servers for automatic routing
+tool_routing:
+  # Sports Data MCP tools
+  get_match_schedule: data
+  get_team_stats: data
+  get_league_table: data
+  get_head_to_head: data
+  get_match_odds: data
+  track_odds_movement: data
+  get_recent_form: data
+  get_season_stats: data
+
+  # Intelligence MCP tools
+  get_match_weather: intelligence
+  assess_weather_impact: intelligence
+  get_historical_weather_performance: intelligence
+  analyze_team_news: intelligence
+  get_injury_reports: intelligence
+
+# Circuit breaker configuration
+circuit_breaker:
+  failure_threshold: 5  # Open circuit after 5 consecutive failures
+  recovery_timeout: 60  # Try to recover after 60 seconds
+  half_open_max_calls: 3  # Allow 3 calls in half-open state
+
+# Monitoring configuration
+monitoring:
+  enabled: true
+  log_requests: true
+  log_responses: false  # Set to true for debugging
+  log_errors: true
+  metrics:
+    enabled: true
+    namespace: "SIPAP/MCP"

@@ -1,14 +1,20 @@
 # SIPAP-Master Examples
 
-Comprehensive working examples demonstrating the Phase 3 Intelligence Layer components.
+Comprehensive working examples demonstrating the Phase 3 & 4 components: Intelligence Layer + Integration Layer.
 
 ## Overview
 
-This directory contains 3 production-ready examples that demonstrate the core functionality of sipap-master:
+This directory contains 6 production-ready examples that demonstrate the full functionality of sipap-master:
 
+### Phase 3 Examples (Intelligence Layer)
 1. **Statistical Functions** - Core prediction algorithms (Poisson, xG, Elo, Form)
 2. **ML Prediction** - Machine learning prediction pipeline
 3. **Ensemble Prediction** - Full multi-agent orchestration with quality gates
+
+### Phase 4 Examples (Integration Layer) **NEW**
+4. **Basic Prediction** - End-to-end prediction pipeline with MCP integration
+5. **API Server** - FastAPI server with HTTP endpoints
+6. **MCP Integration** - MCP client usage and tool routing
 
 All examples are **runnable** and **fully documented**.
 
@@ -203,6 +209,173 @@ Predictions must pass 3 gates to reach users:
 3. **Minimum Consensus (3/5):** At least 3 agents must agree
 
 **Why?** Prevents low-quality predictions from misleading users.
+
+---
+
+## Phase 4 Examples (NEW)
+
+### Example 4: Basic Prediction (`01_basic_prediction.py`)
+
+**Purpose:** Demonstrates the complete end-to-end prediction pipeline with MCP integration.
+
+**Run:**
+
+```bash
+python examples/01_basic_prediction.py
+```
+
+**What it demonstrates:**
+
+- **MainOrchestrator:** Sport-agnostic routing to specialized orchestrators
+- **Context Aggregation:** Fetching data from MCP servers in parallel
+- **Quality Gates:** Validation and confidence thresholds
+- **Expected Value:** +EV analysis for betting opportunities
+- **Complete Pipeline:** All 9 steps from request to recommendation
+
+**Output:** Detailed prediction report with quality gates, +EV analysis, and actionable recommendations.
+
+**Key Learnings:**
+
+- How MainOrchestrator coordinates predictions
+- Understanding the 9-step prediction pipeline
+- Quality gate enforcement in production
+- Expected value calculation and interpretation
+
+---
+
+### Example 5: API Server (`02_api_server.py`)
+
+**Purpose:** Demonstrates running the SIPAP prediction API with FastAPI.
+
+**Run:**
+
+```bash
+python examples/02_api_server.py
+```
+
+**What it demonstrates:**
+
+- **FastAPI Server:** Production-ready HTTP API
+- **Swagger UI:** Interactive API documentation
+- **Request/Response Models:** Pydantic validation
+- **Error Handling:** Proper HTTP status codes and error messages
+- **CORS:** Cross-origin resource sharing setup
+
+**API Endpoints:**
+- `GET /` - Root endpoint (API info)
+- `GET /health` - Health check
+- `GET /sports` - List supported sports
+- `POST /predict` - Generate prediction
+
+**Testing the API:**
+
+```bash
+# Health check
+curl http://localhost:8000/health
+
+# List sports
+curl http://localhost:8000/sports
+
+# Generate prediction
+curl -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sport": "soccer",
+    "match_id": "Man_United_vs_Liverpool",
+    "market": "1X2"
+  }'
+```
+
+**Key Learnings:**
+
+- How to run FastAPI applications
+- Understanding HTTP API design
+- Request/response validation with Pydantic
+- Testing APIs with curl and Swagger UI
+
+---
+
+### Example 6: MCP Integration (`03_mcp_integration.py`)
+
+**Purpose:** Demonstrates MCP client usage, tool routing, and error handling.
+
+**Run:**
+
+```bash
+python examples/03_mcp_integration.py
+```
+
+**What it demonstrates:**
+
+- **MCPFactory:** Creating and managing MCP clients
+- **Tool Routing:** Mapping tools to MCP servers
+- **Health Checks:** Verifying MCP server availability
+- **Error Handling:** Circuit breaker and retry logic
+- **Async Operations:** Parallel MCP calls with asyncio
+
+**Output:** Step-by-step walkthrough of MCP integration patterns.
+
+**Key Learnings:**
+
+- How MCPFactory creates clients from YAML config
+- Tool-to-server routing mechanism
+- Circuit breaker pattern for fault tolerance
+- Retry logic with exponential backoff
+- Health check patterns
+
+**Note:** This example works with or without running MCP servers. If servers are not available, it demonstrates graceful error handling.
+
+---
+
+## Phase 4 Architecture
+
+### Prediction Pipeline (9 Steps)
+
+1. **Request Routing** - MainOrchestrator routes to sport-specific orchestrator
+2. **Context Aggregation** - Fetch data from MCP servers (parallel)
+3. **Context Validation** - Check data quality (70%+ completeness)
+4. **Agent Predictions** - 5 agents generate predictions
+5. **Ensemble Calculation** - Weighted average with agent agreement
+6. **Expected Value** - Calculate +EV from odds
+7. **Quality Gates** - Enforce minimum standards
+8. **Persistence** - Save to Aurora database
+9. **Response** - Return prediction with recommendation
+
+### MCP Integration
+
+**Configuration:** `config/mcp_servers.yml`
+
+```yaml
+mcp_servers:
+  data:
+    name: "sipap-data-mcp"
+    endpoints:
+      local: "http://localhost:8001"
+      dev: "http://sipap-data-mcp-dev.us-east-1.elb.amazonaws.com"
+    timeout: 5.0
+    tools:
+      - get_match_schedule
+      - get_team_stats
+      # ... more tools
+
+  intelligence:
+    name: "sipap-intelligence-mcp"
+    endpoints:
+      local: "http://localhost:8002"
+    timeout: 10.0
+    tools:
+      - get_match_weather
+      - analyze_team_news
+      # ... more tools
+```
+
+**Tool Routing:** Automatic mapping of tool names to MCP servers
+
+```python
+factory = MCPFactory()
+data_mcp = factory.create("data")
+result = await data_mcp.call_tool("get_match_schedule", {"date": "2024-01-15"})
+```
 
 ---
 

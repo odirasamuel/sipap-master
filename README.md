@@ -2,9 +2,22 @@
 
 **SIPAP Main Orchestrator** - AI-powered sports prediction with multi-agent coordination
 
+**Phase**: 4 - Integration Layer ✅ COMPLETE
+**Version**: 0.1.0
+**Status**: Production-ready MVP
+
 ## Overview
 
-sipap-master is the core orchestration layer for SIPAP (Sports Intelligence Platform and Outcome Probability Assessment Platform). It coordinates multiple AI agents to generate ensemble predictions for sports betting markets.
+sipap-master is the core orchestration layer for SIPAP (Sports Intelligence Platform and Outcome Probability Assessment Platform). It coordinates multiple AI agents and MCP servers to generate ensemble predictions for sports betting markets with expected value (+EV) analysis.
+
+### Phase 4 Highlights (NEW)
+
+- ✅ **MainOrchestrator** - Sport-agnostic routing to specialized orchestrators
+- ✅ **FastAPI Endpoints** - Production HTTP API with Swagger documentation
+- ✅ **MCP Integration** - Async client with retry logic and circuit breakers
+- ✅ **Complete Pipeline** - 9-step prediction flow from request to recommendation
+- ✅ **Quality Gates** - Zero errors (pytest: 72/72, mypy: 0, ruff: 0)
+- ✅ **Working Examples** - 6 comprehensive examples (Phase 3 + Phase 4)
 
 ### Architecture
 
@@ -61,36 +74,72 @@ pip install -e '.[dev]'
 
 ## Usage
 
+### Option 1: MainOrchestrator (Phase 4 - Recommended)
+
 ```python
-from sipap.sports.soccer.orchestrator import SoccerOrchestrator
+from sipap.core.orchestrator import MainOrchestrator
 
-# Initialize orchestrator
-orchestrator = SoccerOrchestrator(sport="soccer")
+# Initialize main orchestrator (handles all sports)
+orchestrator = MainOrchestrator()
 
-# Generate prediction
+# Generate prediction with full pipeline
 prediction = await orchestrator.predict(
-    match_id="match-123",
+    sport="soccer",
+    match_id="Man_United_vs_Liverpool",
     market="1X2"  # Home Win, Draw, Away Win
 )
 
-# Result structure
+# Result structure (Phase 4 - Complete)
 {
-    "ensemble": {
-        "market": "1X2",
-        "outcome": "home_win",
-        "probability": 0.62,
-        "confidence": 75
+    "outcome": "Home Win",
+    "probability": 0.65,
+    "confidence": 78.0,
+    "quality_gate": "PASSED",
+    "recommendation": "Prediction ready for user",
+    "expected_value": {
+        "expected_value": 0.25,
+        "edge": 0.15,
+        "is_positive_ev": True,
+        "our_probability": 0.65,
+        "implied_probability": 0.50,
+        "recommendation": "PLACE BET - Positive expected value"
     },
-    "agent_predictions": [
-        {"agent": "statistical", "probability": 0.58, ...},
-        {"agent": "ml", "probability": 0.65, ...},
-        {"agent": "form", "probability": 0.60, ...},
-        {"agent": "market", "probability": 0.63, ...},
-        {"agent": "news", "probability": 0.64, ...}
-    ],
-    "reasoning": "Ensemble analysis indicates...",
-    "evidence": [...]
+    "reasoning": "statistical: Poisson model favors home team | ml: XGBoost...",
+    "evidence": ["Home team in better form", "H2H favors home"]
 }
+```
+
+### Option 2: FastAPI Server (Phase 4)
+
+```bash
+# Start API server
+python examples/02_api_server.py
+
+# Server runs at http://localhost:8000
+# Swagger docs at http://localhost:8000/docs
+```
+
+```bash
+# Make prediction request
+curl -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sport": "soccer",
+    "match_id": "Man_United_vs_Liverpool",
+    "market": "1X2"
+  }'
+```
+
+### Option 3: Direct Orchestrator (Phase 3 - Legacy)
+
+```python
+from sipap.sports.soccer.orchestrator import SoccerOrchestrator
+
+# Initialize sport-specific orchestrator
+orchestrator = SoccerOrchestrator()
+
+# Generate prediction (simplified)
+ensemble = orchestrator._calculate_ensemble(agent_predictions, "1X2")
 ```
 
 ## Development
@@ -126,30 +175,44 @@ ruff check sipap tests
 ```
 sipap-master/
 ├── sipap/
-│   ├── core/                   # Core orchestration
-│   │   ├── orchestrator.py     # Base orchestrator
-│   │   ├── mcp_client.py       # MCP server client
-│   │   └── session.py          # Session management
+│   ├── core/                   # Core orchestration (Phase 4)
+│   │   ├── orchestrator.py     # MainOrchestrator (sport routing) ⭐ NEW
+│   │   └── mcp_client.py       # MCP HTTP client (retry + circuit breaker) ⭐ NEW
 │   ├── sports/
 │   │   └── soccer/
-│   │       ├── orchestrator.py # Soccer orchestrator
-│   │       ├── agents/         # Agent YAML configs
-│   │       └── config/         # Sport config
-│   ├── tools/
-│   │   └── function/           # Python @tool functions
-│   │       ├── statistical.py
-│   │       ├── ml.py
-│   │       ├── form.py
-│   │       └── market.py
+│   │       ├── orchestrator.py # SoccerOrchestrator (updated Phase 4) ⭐
+│   │       │   # - aggregate_context() - MCP data aggregation ⭐ NEW
+│   │       │   # - validate_context_quality() - Quality checks ⭐ NEW
+│   │       │   # - calculate_expected_value() - +EV analysis ⭐ NEW
+│   │       │   # - save_prediction() - Aurora persistence ⭐ NEW
+│   │       └── agents/         # Agent YAML configs (Phase 3)
+│   ├── api/                    # FastAPI endpoints (Phase 4) ⭐ NEW
+│   │   └── handlers.py         # HTTP request handlers
 │   ├── factory/
-│   │   └── agent.py            # AgentToolFactory
+│   │   ├── agent.py            # AgentToolFactory (Phase 3)
+│   │   └── mcp.py              # MCPFactory (YAML → clients) ⭐ NEW
+│   ├── tools/
+│   │   └── function/           # Python @tool functions (Phase 3)
+│   │       ├── statistical.py  # Poisson, xG, Elo, form
+│   │       └── ml.py           # ML prediction wrapper
 │   └── utils/
-│       ├── ensemble.py         # Ensemble calculation
-│       └── quality_gates.py    # Quality validation
+│       └── monitoring.py       # Performance tracking ⭐ NEW
 ├── tests/
-├── examples/
-└── config/
+│   ├── unit/                   # 72 tests passing ✅
+│   └── integration/            # End-to-end tests ⭐ NEW
+├── examples/                   # 6 working examples
+│   ├── 01_basic_prediction.py       # Phase 4 pipeline ⭐ NEW
+│   ├── 02_api_server.py             # FastAPI server ⭐ NEW
+│   ├── 03_mcp_integration.py        # MCP usage ⭐ NEW
+│   ├── example_statistical_functions.py # Phase 3
+│   ├── example_ml_prediction.py         # Phase 3
+│   └── example_ensemble_prediction.py   # Phase 3
+├── config/
+│   └── mcp_servers.yml         # MCP server registry ⭐ NEW
+└── pyproject.toml              # Updated with fastapi, uvicorn
 ```
+
+⭐ = New in Phase 4
 
 ## License
 

@@ -48,6 +48,10 @@ dependencies = [
     # HTTP client for MCP calls
     "httpx>=0.25.0",
 
+    # FastAPI for HTTP API
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+
     # Environment management
     "python-dotenv>=1.0.0",
 ]
@@ -125,6 +129,14 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "sklearn.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "fastapi.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "pydantic.*"
 ignore_missing_imports = true
 
 [tool.ruff]
