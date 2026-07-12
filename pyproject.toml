@@ -1,0 +1,140 @@
+[build-system]
+requires = ["setuptools>=68.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sipap-master"
+version = "0.1.0"
+description = "SIPAP Main Orchestrator - AI-powered sports prediction with multi-agent coordination"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+authors = [
+    {name = "Charles Otuya", email = "charles@sipap.com"}
+]
+keywords = ["sports", "prediction", "ai", "agents", "orchestration", "betting", "xgboost"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    # Core dependencies
+    "sipap-common>=0.1.0",
+    "pydantic>=2.11.7",
+    "PyYAML>=6.0.2",
+    "jsonschema>=4.0.0",
+    "jinja2>=3.1.0",
+
+    # Strands Agents library (like Sentinel)
+    "strands-agents[anthropic]>=1.4.0",
+
+    # AWS SDK
+    "boto3>=1.34.0",
+    "botocore>=1.34.0",
+
+    # Machine Learning
+    "xgboost>=2.0.0",
+    "scikit-learn>=1.3.0",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "scipy>=1.11.0",
+
+    # HTTP client for MCP calls
+    "httpx>=0.25.0",
+
+    # Environment management
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    # Testing
+    "pytest>=9.0.0",
+    "pytest-cov>=4.1.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-mock>=3.12.0",
+
+    # Type checking
+    "mypy>=1.5.0",
+    "types-PyYAML>=6.0.0",
+    "types-boto3>=1.0.0",
+
+    # Linting
+    "ruff>=0.1.0",
+
+    # Build tools
+    "build>=1.0.0",
+    "twine>=4.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/your-org/sipap-master"
+Documentation = "https://github.com/your-org/sipap-master/blob/main/README.md"
+Repository = "https://github.com/your-org/sipap-master"
+Issues = "https://github.com/your-org/sipap-master/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["sipap*"]
+exclude = ["tests*"]
+
+[tool.pytest.ini_options]
+minversion = "9.0"
+addopts = "-ra -q --strict-markers"
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["sipap"]
+omit = ["tests/*", "*/venv/*", "*/.venv/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_any_generics = false
+strict = true
+
+[[tool.mypy.overrides]]
+module = "strands.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "xgboost.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "sklearn.*"
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "B", "C90"]
+ignore = ["E501"]  # Line too long (handled by formatter)
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # Unused imports in __init__.py
+"tests/*" = ["D"]  # Don't require docstrings in tests
