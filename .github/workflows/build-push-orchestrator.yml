@@ -46,6 +46,14 @@ jobs:
     steps:
       - name: Checkout sipap-master repository
         uses: actions/checkout@v4
+        with:
+          path: sipap-master
+
+      - name: Checkout sipap-common repository
+        uses: actions/checkout@v4
+        with:
+          repository: odirasamuel/sipap-common
+          path: sipap-common
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -101,7 +109,7 @@ jobs:
           echo "Repository:  ${ECR_REPOSITORY_NAME}"
           echo "=============================================="
 
-          cd docker
+          cd sipap-master/docker
           python build-orchestrator.py \
             --tag "${IMAGE_TAG}" \
             build push

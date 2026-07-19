@@ -68,6 +68,7 @@ class SIPAPOrchestratorDockerBuilder:
 
         dockerfile_content = """# SIPAP AI Orchestrator Dockerfile
 # Multi-stage build for optimal image size
+# Build context: parent directory containing sipap-master and sipap-common
 
 # Use Python 3.12 slim image
 FROM python:3.12-slim AS builder
@@ -85,10 +86,18 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \\
     build-essential \\
     curl \\
+    git \\
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install Python dependencies
-COPY requirements.txt /app/
+# Copy sipap-common package source and install it first
+# This is a private package not on PyPI
+COPY sipap-common/src /tmp/sipap-common/src
+COPY sipap-common/pyproject.toml /tmp/sipap-common/
+RUN pip install --no-cache-dir /tmp/sipap-common && \\
+    rm -rf /tmp/sipap-common
+
+# Copy requirements and install remaining dependencies
+COPY sipap-master/requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Runtime stage
@@ -100,14 +109,16 @@ WORKDIR /app
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 
 # Copy the SIPAP orchestrator code
-COPY sipap/ /app/sipap/
-COPY config/ /app/config/
-COPY examples/ /app/examples/
+COPY sipap-master/sipap/ /app/sipap/
+COPY sipap-master/config/ /app/config/
+COPY sipap-master/examples/ /app/examples/
+COPY sipap-master/docker/entrypoint-orchestrator.sh /app/docker/entrypoint-orchestrator.sh
 
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash app && \\
     mkdir -p logs sessions && \\
-    chown -R app:app /app
+    chown -R app:app /app && \\
+    chmod +x /app/docker/entrypoint-orchestrator.sh
 
 USER app
 
@@ -143,20 +154,33 @@ CMD ["uvicorn", "sipap.api.handlers:app", "--host", "0.0.0.0", "--port", "8080"]
 
         logger.info("Dockerfile generated successfully")
 
+        # Determine build context
+        # If sipap-common exists as sibling directory, use parent as context
+        sipap_common_path = self.project_root.parent / "sipap-common"
+        if sipap_common_path.exists():
+            build_context = self.project_root.parent
+            dockerfile_relative = "sipap-master/Dockerfile"
+            logger.info(f"Using parent directory as build context (sipap-common detected)")
+        else:
+            build_context = self.project_root
+            dockerfile_relative = "Dockerfile"
+            logger.info(f"Using project root as build context (sipap-common not found)")
+
         # Build image with BuildKit
         build_cmd = [
             "docker", "build",
             "--platform", "linux/amd64",
             "--build-arg", "BUILDKIT_INLINE_CACHE=1",
             "-t", image_name,
-            "-f", str(dockerfile_path),
-            str(self.project_root)
+            "-f", dockerfile_relative,
+            "."
         ]
 
         logger.info(f"Running: {' '.join(build_cmd)}")
+        logger.info(f"Build context: {build_context}")
 
         try:
-            subprocess.run(build_cmd, check=True, cwd=self.project_root)
+            subprocess.run(build_cmd, check=True, cwd=build_context)
             logger.info(f"✅ Image built successfully: {image_name}")
         except subprocess.CalledProcessError as e:
             logger.error(f"❌ Build failed: {e}")
