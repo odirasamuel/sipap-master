@@ -155,3 +155,4 @@ jobs:
           echo "1. Deploy to ECS Fargate with updated image digest" >> "$GITHUB_STEP_SUMMARY"
           echo "2. Verify health check endpoint" >> "$GITHUB_STEP_SUMMARY"
           echo "3. Test prediction API" >> "$GITHUB_STEP_SUMMARY"
+
