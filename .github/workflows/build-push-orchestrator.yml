@@ -1,0 +1,157 @@
+name: Build and Push SIPAP Orchestrator to ECR
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "sipap/**"
+      - "config/**"
+      - "requirements.txt"
+      - "pyproject.toml"
+      - "docker/**"
+      - ".github/workflows/build-push-orchestrator.yml"
+
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Docker image tag (default: latest)"
+        required: false
+        type: string
+        default: "latest"
+      force_build:
+        description: "Force build even without changes"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: sipap-orchestrator-build
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY_NAME: sipap-dev-orchestrator
+  IMAGE_TAG: ${{ github.event.inputs.tag || 'latest' }}
+
+jobs:
+  build-and-push:
+    name: "Build and Push SIPAP Orchestrator"
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout sipap-master repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: "${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}"
+          role-session-name: sipap-orchestrator-build-dev
+          aws-region: "${{ env.AWS_REGION }}"
+
+      - name: Verify AWS Identity
+        run: |
+          aws sts get-caller-identity
+          echo "AWS Region: $AWS_REGION"
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Check if ECR repository exists
+        id: check-ecr
+        run: |
+          if aws ecr describe-repositories --repository-names "${ECR_REPOSITORY_NAME}" 2>/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "ECR repository ${ECR_REPOSITORY_NAME} exists"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "ECR repository ${ECR_REPOSITORY_NAME} does not exist"
+          fi
+
+      - name: Create ECR repository if needed
+        if: steps.check-ecr.outputs.exists == 'false'
+        run: |
+          echo "Creating ECR repository: ${ECR_REPOSITORY_NAME}"
+          aws ecr create-repository \
+            --repository-name "${ECR_REPOSITORY_NAME}" \
+            --image-scanning-configuration scanOnPush=true \
+            --encryption-configuration encryptionType=AES256
+          echo "ECR repository created successfully"
+
+      - name: "Build and Push Orchestrator (tag: ${{ env.IMAGE_TAG }})"
+        run: |
+          echo "=============================================="
+          echo "Component:   SIPAP Orchestrator"
+          echo "Environment: dev"
+          echo "Branch:      ${{ github.ref_name }}"
+          echo "Image Tag:   ${IMAGE_TAG}"
+          echo "Repository:  ${ECR_REPOSITORY_NAME}"
+          echo "=============================================="
+
+          cd docker
+          python build-orchestrator.py \
+            --tag "${IMAGE_TAG}" \
+            build push
+
+      - name: Get Image Digest from ECR
+        id: image-digest
+        run: |
+          DIGEST=$(aws ecr describe-images \
+            --repository-name "${ECR_REPOSITORY_NAME}" \
+            --image-ids imageTag="${IMAGE_TAG}" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)
+
+          if [ -z "$DIGEST" ] || [ "$DIGEST" = "None" ]; then
+            echo "ERROR: Could not resolve digest for ${ECR_REPOSITORY_NAME}:${IMAGE_TAG}"
+            exit 1
+          fi
+
+          echo "Resolved digest: $DIGEST"
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Get Image Size
+        id: image-size
+        run: |
+          SIZE_BYTES=$(aws ecr describe-images \
+            --repository-name "${ECR_REPOSITORY_NAME}" \
+            --image-ids imageTag="${IMAGE_TAG}" \
+            --query 'imageDetails[0].imageSizeInBytes' \
+            --output text)
+
+          SIZE_MB=$((SIZE_BYTES / 1024 / 1024))
+          echo "size_mb=$SIZE_MB" >> "$GITHUB_OUTPUT"
+          echo "Image size: ${SIZE_MB} MB"
+
+      - name: Build Summary
+        run: |
+          echo "### SIPAP Orchestrator Build Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Component**: SIPAP AI Orchestrator" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Environment**: development" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **ECR Repository**: \`${ECR_REPOSITORY_NAME}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Image Tag**: \`${IMAGE_TAG}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Image Digest**: \`${{ steps.image-digest.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Image Size**: ${{ steps.image-size.outputs.size_mb }} MB" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Branch**: \`${{ github.ref_name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Commit**: \`${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Triggered by**: ${{ github.actor }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Status**: ✅ Success" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "#### Next Steps" >> "$GITHUB_STEP_SUMMARY"
+          echo "1. Deploy to ECS Fargate with updated image digest" >> "$GITHUB_STEP_SUMMARY"
+          echo "2. Verify health check endpoint" >> "$GITHUB_STEP_SUMMARY"
+          echo "3. Test prediction API" >> "$GITHUB_STEP_SUMMARY"

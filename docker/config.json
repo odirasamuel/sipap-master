@@ -1,0 +1,9 @@
+{
+  "ecr_registry": "810278669998.dkr.ecr.us-east-1.amazonaws.com",
+  "ecr_repository": "sipap-dev-orchestrator",
+  "aws_region": "us-east-1",
+  "aws_profile": "odiraaws",
+  "build_platform": "linux/amd64",
+  "python_version": "3.12",
+  "description": "SIPAP AI Orchestrator - Sports Intelligence Platform"
+}
