@@ -126,12 +126,14 @@ RUN useradd --create-home --shell /bin/bash app && \\
 
 USER app
 
-# Expose API port
+# Expose API port (for API mode)
 EXPOSE 8080
 
-# Health check
+# Health check - Heartbeat file based (works for daemon mode)
+# Checks if /tmp/sipap-heartbeat exists and timestamp is fresh (<90s old)
+# This matches the Sentinel pattern for daemon health monitoring
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \\
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD python -c "import json,time;d=json.load(open('/tmp/sipap-heartbeat'));exit(0 if time.time()-d['timestamp']<90 else 1)" || exit 1
 
 # Set the entrypoint
 ENTRYPOINT ["/app/docker/entrypoint-orchestrator.sh"]
