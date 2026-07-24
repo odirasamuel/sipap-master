@@ -131,11 +131,11 @@ USER app
 # Expose API port (for API mode)
 EXPOSE 8080
 
-# Health check - Heartbeat file based (works for daemon and API mode)
-# Uses healthcheck.sh script for reliable checks
-# Checks heartbeat file first (daemon mode), falls back to HTTP (API mode)
-HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \\
-    CMD /app/docker/healthcheck.sh
+# Health check disabled - daemon mode doesn't need HTTP endpoint
+# ECS will monitor task status and restart if container exits
+# For daemon mode: relies on graceful shutdown and process supervision
+# For API mode: can enable HTTP-based health check via ECS target group
+# HEALTHCHECK NONE
 
 # Set the entrypoint
 ENTRYPOINT ["/app/docker/entrypoint-orchestrator.sh"]
