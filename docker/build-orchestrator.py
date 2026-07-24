@@ -136,8 +136,10 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \\
 # Set the entrypoint
 ENTRYPOINT ["/app/docker/entrypoint-orchestrator.sh"]
 
-# Default command (can be overridden)
-CMD ["uvicorn", "sipap.api.handlers:app", "--host", "0.0.0.0", "--port", "8080"]
+# No default command - entrypoint handles mode selection via ORCHESTRATOR_MODE
+# For custom commands (debugging, etc.), override at runtime:
+#   docker run <image> <custom-command>
+CMD []
 """
         return dockerfile_content
 
