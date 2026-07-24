@@ -2,25 +2,29 @@
 # SIPAP Orchestrator Health Check
 # Works for both daemon mode (heartbeat file) and API mode (HTTP endpoint)
 
-set -e
-
 # Check 1: Heartbeat file (daemon mode)
 if [ -f "/tmp/sipap-heartbeat" ]; then
-    # Read timestamp from heartbeat file
-    timestamp=$(python3 -c "import json; print(json.load(open('/tmp/sipap-heartbeat'))['timestamp'])" 2>/dev/null || echo "0")
-    current_time=$(python3 -c "import time; print(time.time())" 2>/dev/null || echo "0")
-    age=$(python3 -c "print($current_time - $timestamp)" 2>/dev/null || echo "999")
+    # Read timestamp and compare with current time
+    heartbeat_age=$(python3 -c "
+import json
+import time
+try:
+    with open('/tmp/sipap-heartbeat') as f:
+        data = json.load(f)
+        age = time.time() - data['timestamp']
+        print(int(age))
+except:
+    print(999)
+" 2>/dev/null)
 
     # If heartbeat is fresh (<90s), consider healthy
-    if (( $(echo "$age < 90" | bc -l) )); then
+    if [ "$heartbeat_age" -lt 90 ] 2>/dev/null; then
         exit 0
     fi
 fi
 
 # Check 2: HTTP endpoint (API mode fallback)
-if curl -f http://localhost:8080/health 2>/dev/null; then
-    exit 0
-fi
+curl -f http://localhost:8080/health >/dev/null 2>&1 && exit 0
 
 # Both checks failed
 exit 1
