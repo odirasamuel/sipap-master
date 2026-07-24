@@ -1,24 +1,18 @@
 #!/bin/bash
 # SIPAP Orchestrator Health Check
-# Works for both daemon mode (heartbeat file) and API mode (HTTP endpoint)
+# Ultra-simple: Check if heartbeat file was modified in last 90 seconds
+
+HEARTBEAT_FILE="/tmp/sipap-heartbeat"
 
 # Check 1: Heartbeat file (daemon mode)
-if [ -f "/tmp/sipap-heartbeat" ]; then
-    # Read timestamp and compare with current time
-    heartbeat_age=$(python3 -c "
-import json
-import time
-try:
-    with open('/tmp/sipap-heartbeat') as f:
-        data = json.load(f)
-        age = time.time() - data['timestamp']
-        print(int(age))
-except:
-    print(999)
-" 2>/dev/null)
+if [ -f "$HEARTBEAT_FILE" ]; then
+    # Get file modification time in seconds since epoch
+    file_mtime=$(stat -c %Y "$HEARTBEAT_FILE" 2>/dev/null || stat -f %m "$HEARTBEAT_FILE" 2>/dev/null || echo "0")
+    current_time=$(date +%s)
+    age=$((current_time - file_mtime))
 
-    # If heartbeat is fresh (<90s), consider healthy
-    if [ "$heartbeat_age" -lt 90 ] 2>/dev/null; then
+    # If file was modified in last 90 seconds, consider healthy
+    if [ "$age" -lt 90 ]; then
         exit 0
     fi
 fi
