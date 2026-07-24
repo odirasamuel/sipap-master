@@ -106,7 +106,7 @@ FROM python:3.12-slim
 WORKDIR /app
 
 # Install dependencies for health checks
-RUN apt-get update && apt-get install -y --no-install-recommends curl bc && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends curl jq && rm -rf /var/lib/apt/lists/*
 
 # Copy installed packages and binaries from builder
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
