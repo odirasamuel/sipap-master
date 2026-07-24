@@ -105,8 +105,8 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install curl for health checks
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+# Install dependencies for health checks
+RUN apt-get update && apt-get install -y --no-install-recommends curl bc && rm -rf /var/lib/apt/lists/*
 
 # Copy installed packages and binaries from builder
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
@@ -117,12 +117,14 @@ COPY sipap-master/sipap/ /app/sipap/
 COPY sipap-master/config/ /app/config/
 COPY sipap-master/examples/ /app/examples/
 COPY sipap-master/docker/entrypoint-orchestrator.sh /app/docker/entrypoint-orchestrator.sh
+COPY sipap-master/docker/healthcheck.sh /app/docker/healthcheck.sh
 
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash app && \\
     mkdir -p logs sessions && \\
     chown -R app:app /app && \\
-    chmod +x /app/docker/entrypoint-orchestrator.sh
+    chmod +x /app/docker/entrypoint-orchestrator.sh && \\
+    chmod +x /app/docker/healthcheck.sh
 
 USER app
 
@@ -130,15 +132,10 @@ USER app
 EXPOSE 8080
 
 # Health check - Heartbeat file based (works for daemon and API mode)
-# Checks if /tmp/sipap-heartbeat exists and timestamp is fresh (<90s old)
-# Falls back to HTTP check for API mode
-# This matches the Sentinel pattern for daemon health monitoring
+# Uses healthcheck.sh script for reliable checks
+# Checks heartbeat file first (daemon mode), falls back to HTTP (API mode)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \\
-    CMD python -c "import json,time,os; \\
-path='/tmp/sipap-heartbeat'; \\
-exit(0 if os.path.exists(path) and (time.time()-json.load(open(path))['timestamp']<90) else 1)" 2>/dev/null \\
-    || curl -f http://localhost:8080/health 2>/dev/null \\
-    || exit 1
+    CMD /app/docker/healthcheck.sh
 
 # Set the entrypoint
 ENTRYPOINT ["/app/docker/entrypoint-orchestrator.sh"]
