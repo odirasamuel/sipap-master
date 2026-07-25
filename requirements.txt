@@ -22,6 +22,9 @@ httpx>=0.25.0
 boto3>=1.34.0
 botocore>=1.34.0
 
+# WhatsApp Integration
+twilio>=9.0.0
+
 # Machine Learning
 xgboost>=2.0.0
 scikit-learn>=1.3.0

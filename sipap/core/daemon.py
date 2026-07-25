@@ -28,6 +28,7 @@ Example:
 
 import asyncio
 import logging
+import os
 import signal
 import sys
 import threading
@@ -38,6 +39,7 @@ from sipap.aws.sqs import Message, SQSAdapter
 from sipap.core.errors import ErrorType, classify_error
 from sipap.core.heartbeat import Heartbeat
 from sipap.core.orchestrator import MainOrchestrator
+from sipap.integrations.twilio import TwilioWhatsAppClient
 
 logger = logging.getLogger(__name__)
 
@@ -200,12 +202,17 @@ async def process_whatsapp_message(
     }
 
 
-async def send_whatsapp_response(phone: str, response: dict[str, Any]) -> bool:
+async def send_whatsapp_response(
+    phone: str,
+    response: dict[str, Any],
+    twilio_client: "TwilioWhatsAppClient"
+) -> bool:
     """Send WhatsApp response via Twilio API.
 
     Args:
         phone: User phone number (E.164 format)
         response: Response dict with response_text
+        twilio_client: Initialized Twilio WhatsApp client
 
     Returns:
         True if sent successfully, False otherwise
@@ -213,22 +220,35 @@ async def send_whatsapp_response(phone: str, response: dict[str, Any]) -> bool:
     Example:
         >>> success = await send_whatsapp_response(
         ...     phone="+1234567890",
-        ...     response={"response_text": "Hello!"}
+        ...     response={"response_text": "Hello!"},
+        ...     twilio_client=client
         ... )
     """
-    # TODO: Implement Twilio WhatsApp API integration
-    # For now, log response
+    try:
+        message_sid = await twilio_client.send_message_with_retry(
+            to_phone=phone,
+            message_text=response["response_text"],
+            max_retries=3
+        )
 
-    logger.info(
-        f"[MOCK] Sending WhatsApp response to {phone}",
-        extra={
-            "phone": phone,
-            "response_length": len(response["response_text"])
-        }
-    )
+        logger.info(
+            "WhatsApp response sent successfully",
+            extra={
+                "phone": phone,
+                "message_sid": message_sid,
+                "response_length": len(response["response_text"])
+            }
+        )
 
-    # Placeholder: Always return success
-    return True
+        return True
+
+    except Exception as e:
+        logger.error(
+            f"Failed to send WhatsApp response: {e}",
+            exc_info=True,
+            extra={"phone": phone}
+        )
+        return False
 
 
 async def process_message(
@@ -236,6 +256,7 @@ async def process_message(
     orchestrator: MainOrchestrator,
     sqs_adapter: SQSAdapter,
     heartbeat: Heartbeat,
+    twilio_client: TwilioWhatsAppClient,
 ) -> bool:
     """Process a single SQS message.
 
@@ -276,7 +297,9 @@ async def process_message(
         response = await process_whatsapp_message(whatsapp_msg, orchestrator)
 
         # Send WhatsApp response
-        success = await send_whatsapp_response(whatsapp_msg["phone"], response)
+        success = await send_whatsapp_response(
+            whatsapp_msg["phone"], response, twilio_client
+        )
 
         if not success:
             raise ConnectionError("Failed to send WhatsApp response")
@@ -331,6 +354,7 @@ def daemon_loop(
     orchestrator: MainOrchestrator,
     shutdown_event: threading.Event,
     heartbeat: Heartbeat,
+    twilio_client: TwilioWhatsAppClient,
     poll_interval: int = 1,
 ) -> None:
     """Main daemon polling loop.
@@ -374,7 +398,9 @@ def daemon_loop(
             asyncio.set_event_loop(loop)
             try:
                 success = loop.run_until_complete(
-                    process_message(message, orchestrator, sqs_adapter, heartbeat)
+                    process_message(
+                        message, orchestrator, sqs_adapter, heartbeat, twilio_client
+                    )
                 )
             finally:
                 loop.close()
@@ -410,6 +436,7 @@ def start_daemon(
     queue_url: str,
     region: str = "us-east-1",
     heartbeat_path: str = "/tmp/sipap-heartbeat",
+    twilio_secret_arn: str | None = None,
 ) -> None:
     """Start daemon mode with SQS polling.
 
@@ -420,6 +447,8 @@ def start_daemon(
         queue_url: SQS queue URL
         region: AWS region (default: us-east-1)
         heartbeat_path: Path to heartbeat file (default: /tmp/sipap-heartbeat)
+        twilio_secret_arn: AWS Secrets Manager ARN for Twilio credentials
+                          (reads from TWILIO_SECRET_ARN env var if not provided)
 
     Example:
         >>> start_daemon(
@@ -440,6 +469,16 @@ def start_daemon(
     heartbeat = Heartbeat(path=heartbeat_path)
     shutdown_event = threading.Event()
 
+    # Initialize Twilio WhatsApp client
+    if twilio_secret_arn is None:
+        twilio_secret_arn = os.environ.get("TWILIO_SECRET_ARN")
+        if not twilio_secret_arn:
+            logger.error("TWILIO_SECRET_ARN environment variable not set")
+            sys.exit(1)
+
+    logger.info(f"Loading Twilio credentials from: {twilio_secret_arn}")
+    twilio_client = TwilioWhatsAppClient(secret_arn=twilio_secret_arn, region=region)
+
     # Register signal handlers
     setup_signal_handlers(shutdown_event)
 
@@ -450,6 +489,7 @@ def start_daemon(
             orchestrator=orchestrator,
             shutdown_event=shutdown_event,
             heartbeat=heartbeat,
+            twilio_client=twilio_client,
         )
     except Exception as e:
         logger.error(f"Daemon failed: {e}", exc_info=True)
