@@ -297,7 +297,7 @@ class MainOrchestrator:
         """
         self.logger.info(
             "User message received",
-            extra={"user_id": user_id, "message": message[:100]},
+            extra={"user_id": user_id, "user_message": message[:100]},
         )
 
         # Step 1: Add user message to conversation history
