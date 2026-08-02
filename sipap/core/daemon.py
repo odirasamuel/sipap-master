@@ -225,17 +225,20 @@ async def process_whatsapp_message(
 async def send_whatsapp_response(
     phone: str,
     response: dict[str, Any],
-    twilio_client: "TwilioWhatsAppClient"
+    twilio_client: "TwilioWhatsAppClient" | None
 ) -> bool:
     """Send WhatsApp response via Twilio API.
+
+    Supports dry-run mode via ENABLE_WHATSAPP_DELIVERY environment variable.
+    When disabled, logs the message instead of sending it.
 
     Args:
         phone: User phone number (E.164 format)
         response: Response dict with response_text
-        twilio_client: Initialized Twilio WhatsApp client
+        twilio_client: Initialized Twilio WhatsApp client (None if disabled)
 
     Returns:
-        True if sent successfully, False otherwise
+        True if sent successfully (or logged in dry-run), False otherwise
 
     Example:
         >>> success = await send_whatsapp_response(
@@ -244,6 +247,23 @@ async def send_whatsapp_response(
         ...     twilio_client=client
         ... )
     """
+    # Check if WhatsApp delivery is enabled
+    enable_delivery = os.getenv("ENABLE_WHATSAPP_DELIVERY", "false").lower() == "true"
+
+    if not enable_delivery or twilio_client is None:
+        # Dry-run mode: Log message instead of sending
+        logger.info(
+            "📱 [DRY-RUN] WhatsApp message would be sent (delivery disabled)",
+            extra={
+                "phone": phone,
+                "response_length": len(response["response_text"]),
+                "preview": response["response_text"][:200] + "..." if len(response["response_text"]) > 200 else response["response_text"]
+            }
+        )
+        logger.info(f"📱 [DRY-RUN] Full message to {phone}:\n{response['response_text']}")
+        return True
+
+    # Production mode: Send via Twilio
     try:
         message_sid = await twilio_client.send_message_with_retry(
             to_phone=phone,
@@ -276,7 +296,7 @@ async def process_message(
     orchestrator: MainOrchestrator,
     sqs_adapter: SQSAdapter,
     heartbeat: Heartbeat,
-    twilio_client: TwilioWhatsAppClient,
+    twilio_client: TwilioWhatsAppClient | None,
 ) -> bool:
     """Process a single SQS message.
 
@@ -284,7 +304,7 @@ async def process_message(
     1. Update heartbeat (processing)
     2. Parse WhatsApp message
     3. Generate prediction
-    4. Send WhatsApp response
+    4. Send WhatsApp response (or log in dry-run mode)
     5. Delete message from queue (success)
     6. Update heartbeat (success)
 
@@ -297,6 +317,7 @@ async def process_message(
         orchestrator: Main orchestrator
         sqs_adapter: SQS adapter
         heartbeat: Heartbeat tracker
+        twilio_client: Twilio WhatsApp client (None if delivery disabled)
 
     Returns:
         True if processed successfully, False otherwise
@@ -374,7 +395,7 @@ def daemon_loop(
     orchestrator: MainOrchestrator,
     shutdown_event: threading.Event,
     heartbeat: Heartbeat,
-    twilio_client: TwilioWhatsAppClient,
+    twilio_client: TwilioWhatsAppClient | None,
     poll_interval: int = 1,
 ) -> None:
     """Main daemon polling loop.
@@ -386,6 +407,7 @@ def daemon_loop(
         orchestrator: Main orchestrator
         shutdown_event: Event to signal shutdown
         heartbeat: Heartbeat tracker
+        twilio_client: Twilio WhatsApp client (None if delivery disabled)
         poll_interval: Seconds to wait between polls (default: 1)
 
     Example:
@@ -393,7 +415,8 @@ def daemon_loop(
         ...     sqs_adapter=adapter,
         ...     orchestrator=orchestrator,
         ...     shutdown_event=shutdown_event,
-        ...     heartbeat=heartbeat
+        ...     heartbeat=heartbeat,
+        ...     twilio_client=None  # Dry-run mode
         ... )
     """
     logger.info("Starting daemon polling loop")
@@ -475,12 +498,16 @@ def start_daemon(
         ...     queue_url="https://sqs.us-east-1.amazonaws.com/.../queue.fifo"
         ... )
     """
+    # Check if WhatsApp delivery is enabled
+    enable_whatsapp_delivery = os.getenv("ENABLE_WHATSAPP_DELIVERY", "false").lower() == "true"
+
     logger.info("=" * 70)
     logger.info("SIPAP Orchestrator - Daemon Mode")
     logger.info("=" * 70)
     logger.info(f"Queue URL: {queue_url}")
     logger.info(f"Region: {region}")
     logger.info(f"Heartbeat: {heartbeat_path}")
+    logger.info(f"WhatsApp Delivery: {'ENABLED' if enable_whatsapp_delivery else 'DISABLED (Dry-Run Mode)'}")
     logger.info("=" * 70)
 
     # Initialize components
@@ -489,15 +516,19 @@ def start_daemon(
     heartbeat = Heartbeat(path=heartbeat_path)
     shutdown_event = threading.Event()
 
-    # Initialize Twilio WhatsApp client
-    if twilio_secret_arn is None:
-        twilio_secret_arn = os.environ.get("TWILIO_SECRET_ARN")
-        if not twilio_secret_arn:
-            logger.error("TWILIO_SECRET_ARN environment variable not set")
-            sys.exit(1)
+    # Initialize Twilio WhatsApp client (optional - only if delivery enabled)
+    twilio_client = None
+    if enable_whatsapp_delivery:
+        if twilio_secret_arn is None:
+            twilio_secret_arn = os.environ.get("TWILIO_SECRET_ARN")
+            if not twilio_secret_arn:
+                logger.error("TWILIO_SECRET_ARN environment variable not set")
+                sys.exit(1)
 
-    logger.info(f"Loading Twilio credentials from: {twilio_secret_arn}")
-    twilio_client = TwilioWhatsAppClient(secret_arn=twilio_secret_arn, region=region)
+        logger.info(f"Loading Twilio credentials from: {twilio_secret_arn}")
+        twilio_client = TwilioWhatsAppClient(secret_arn=twilio_secret_arn, region=region)
+    else:
+        logger.warning("⚠️  WhatsApp delivery DISABLED - Running in dry-run mode (messages will be logged only)")
 
     # Register signal handlers
     setup_signal_handlers(shutdown_event)
