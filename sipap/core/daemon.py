@@ -146,9 +146,9 @@ async def process_whatsapp_message(
     """Process WhatsApp message and generate prediction.
 
     Steps:
-    1. Parse user intent from message text
-    2. Extract match information (if prediction request)
-    3. Call orchestrator to generate prediction
+    1. Parse user intent from message text with NLU agent
+    2. Route to appropriate handler (batch prediction, single prediction, etc.)
+    3. Generate predictions with AI agents
     4. Format response for WhatsApp
 
     Args:
@@ -162,7 +162,7 @@ async def process_whatsapp_message(
 
     Example:
         >>> response = await process_whatsapp_message(
-        ...     whatsapp_msg={"phone": "+1234567890", "text": "Predict Man U vs Liverpool"},
+        ...     whatsapp_msg={"phone": "+1234567890", "text": "I need 20 odds with highest positive outcome"},
         ...     orchestrator=orchestrator
         ... )
     """
@@ -174,32 +174,52 @@ async def process_whatsapp_message(
         extra={"phone": phone, "text": user_text}
     )
 
-    # TODO: Implement conversation state machine
-    # For now, assume all messages are prediction requests
+    # Call MainOrchestrator.handle_user_message for full NLU + prediction flow
+    try:
+        result = await orchestrator.handle_user_message(
+            user_id=phone,
+            message=user_text,
+        )
 
-    # Simple parsing: Extract sport, match, market
-    # Format: "Predict [match_id]" or "[match_id]"
-    # Example: "Man United vs Liverpool" or "Predict Man United vs Liverpool"
+        # Extract response text
+        response_text = result.get("message", "")
 
-    # Placeholder: Mock prediction for MVP
-    # In production, parse user intent and call appropriate handler
+        # Log intent for debugging
+        logger.info(
+            f"Prediction complete for {phone}",
+            extra={
+                "phone": phone,
+                "intent": result.get("intent"),
+                "has_data": result.get("data") is not None,
+                "has_error": result.get("error") is not None,
+            },
+        )
 
-    response_text = (
-        f"🤖 SIPAP AI Assistant\n\n"
-        f"You said: {user_text}\n\n"
-        f"⚠️ Prediction feature coming soon!\n\n"
-        f"I'll analyze:\n"
-        f"• Match statistics\n"
-        f"• Betting odds\n"
-        f"• News & sentiment\n"
-        f"• Historical data\n\n"
-        f"And provide probability assessments with +EV recommendations."
-    )
+        return {
+            "response_text": response_text,
+            "prediction": result.get("data"),
+            "intent": result.get("intent"),
+            "error": result.get("error"),
+        }
 
-    return {
-        "response_text": response_text,
-        "prediction": None,  # TODO: Add real prediction
-    }
+    except Exception as e:
+        logger.error(
+            f"Failed to process message from {phone}: {e}",
+            exc_info=True,
+            extra={"phone": phone},
+        )
+
+        # Return error response
+        return {
+            "response_text": (
+                f"❌ Processing Error\n\n"
+                f"I encountered an error processing your request: {str(e)}\n\n"
+                f"Please try again or rephrase your message."
+            ),
+            "prediction": None,
+            "intent": "error",
+            "error": str(e),
+        }
 
 
 async def send_whatsapp_response(
