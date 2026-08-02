@@ -2,13 +2,25 @@
 
 **SIPAP Main Orchestrator** - AI-powered sports prediction with multi-agent coordination
 
-**Phase**: 4 - Integration Layer ✅ COMPLETE
+**Company**: Ridha Tech
+**Product**: SIPAP (Sports Intelligence Platform and Outcome Probability Assessment Platform)
+**Phase**: 6A - WhatsApp Integration (In Progress)
 **Version**: 0.1.0
 **Status**: Production-ready MVP
+
+---
+
+## About Ridha Tech
+
+Ridha Tech is an AI solutions company specializing in intelligent automation and conversational AI platforms. SIPAP is our flagship product, delivering AI-powered sports intelligence through WhatsApp.
+
+---
 
 ## Overview
 
 sipap-master is the core orchestration layer for SIPAP (Sports Intelligence Platform and Outcome Probability Assessment Platform). It coordinates multiple AI agents and MCP servers to generate ensemble predictions for sports betting markets with expected value (+EV) analysis.
+
+This repository contains the main orchestrator, AI agents, daemon mode (SQS polling), and WhatsApp integration via Twilio.
 
 ### Phase 4 Highlights (NEW)
 

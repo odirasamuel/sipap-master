@@ -5,9 +5,8 @@ model:
   max_tokens: 4096
   temperature: 0.1
 tools:
-  - mcp/sports-data
-  - mcp/historical-data
-  - function/form
+  - mcp/data              # Sports data and historical data
+  - function/statistical  # form_score function
 conversation_manager:
   type: sliding_window
   window_size: 10

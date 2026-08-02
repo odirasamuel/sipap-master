@@ -5,7 +5,7 @@ model:
   max_tokens: 4096
   temperature: 0.3  # Higher temperature for nuanced sentiment
 tools:
-  - mcp/news-context       # get_injury_reports, get_recent_news
+  - mcp/intelligence      # get_injury_reports, analyze_team_news
 conversation_manager:
   type: sliding_window
   window_size: 10

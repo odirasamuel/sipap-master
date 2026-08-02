@@ -5,8 +5,7 @@ model:
   max_tokens: 4096
   temperature: 0.1
 tools:
-  - mcp/odds-intelligence   # get_current_odds, get_odds_movement
-  - mcp/historical-data     # get_historical_odds
+  - mcp/data              # get_match_odds, get_odds_movements
 conversation_manager:
   type: sliding_window
   window_size: 10

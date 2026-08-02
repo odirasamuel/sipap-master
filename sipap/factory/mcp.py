@@ -269,6 +269,98 @@ class MCPFactory:
 
         return health_status
 
+    async def get_tools_for_agent(self, server_name: str) -> list[Any]:
+        """
+        Get MCP server's tools as Strands-compatible tool functions.
+
+        This method:
+        1. Fetches tool definitions from MCP server (tools/list)
+        2. Creates async wrapper functions for each tool
+        3. Returns list of callable tools for Strands Agent
+
+        Args:
+            server_name: MCP server name (e.g., "data", "intelligence")
+
+        Returns:
+            List of async tool functions compatible with Strands Agent
+
+        Example:
+            >>> factory = MCPFactory()
+            >>> data_tools = await factory.get_tools_for_agent("data")
+            >>> agent = Agent(model=model, tools=data_tools, ...)
+        """
+        from functools import wraps
+
+        # Get MCP client
+        client = self.create(server_name)
+
+        # Fetch tool definitions from MCP server
+        try:
+            tool_definitions = await client.list_tools()
+            self.logger.info(
+                f"Loaded {len(tool_definitions)} tools from {server_name}",
+                extra={"server": server_name, "tool_count": len(tool_definitions)},
+            )
+        except Exception as e:
+            self.logger.error(
+                f"Failed to load tools from {server_name}: {e}",
+                exc_info=True,
+            )
+            return []
+
+        # Create wrapper functions for each tool
+        tools = []
+        for tool_def in tool_definitions:
+            tool_name = tool_def["name"]
+            tool_description = tool_def.get("description", "")
+            input_schema = tool_def.get("inputSchema", {})
+
+            # Create factory function to fix closure issue
+            def create_mcp_tool(
+                name: str, server: str, mcp_client: MCPClient
+            ) -> Any:
+                """Factory function to create MCP tool wrapper with correct closure."""
+
+                async def mcp_tool_wrapper(**kwargs: Any) -> dict[str, Any]:
+                    """MCP tool wrapper (dynamically created)."""
+                    try:
+                        result = await mcp_client.call_tool(name, kwargs)
+                        return result
+                    except Exception as e:
+                        self.logger.error(
+                            f"MCP tool call failed: {server}.{name}",
+                            extra={"error": str(e), "arguments": kwargs},
+                            exc_info=True,
+                        )
+                        raise
+
+                # Set function metadata
+                mcp_tool_wrapper.__name__ = name
+                mcp_tool_wrapper.__doc__ = tool_description
+
+                return mcp_tool_wrapper
+
+            # Create the wrapper function
+            wrapper = create_mcp_tool(tool_name, server_name, client)
+
+            # Decorate with @tool
+            from strands import tool
+
+            tool_func = tool(
+                name=tool_name,
+                description=tool_description,
+                input_schema=input_schema,
+            )(wrapper)
+
+            tools.append(tool_func)
+
+            self.logger.debug(
+                f"Created tool wrapper: {server_name}.{tool_name}",
+                extra={"tool_name": tool_name},
+            )
+
+        return tools
+
     async def close_all(self) -> None:
         """Close all MCP client connections."""
         for server_name, client in self._clients.items():

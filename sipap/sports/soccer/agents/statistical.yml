@@ -6,14 +6,10 @@ model:
   temperature: 0.1
 tools:
   # Data MCP Servers (call via MCP)
-  - mcp/sports-data        # get_team_stats, get_head_to_head
-  - mcp/historical-data    # get_season_stats, get_league_table
+  - mcp/data              # get_team_stats, get_head_to_head, get_season_stats, get_league_table
 
   # Python functions (call directly)
-  - function/poisson       # poisson_model function
-  - function/xg            # xg_calculator function
-  - function/elo           # elo_rating function
-  - function/form          # form_score function
+  - function/statistical  # poisson_model, xg_calculator, elo_rating, form_score
 conversation_manager:
   type: sliding_window
   window_size: 10

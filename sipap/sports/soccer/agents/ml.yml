@@ -6,13 +6,12 @@ model:
   temperature: 0.1
 tools:
   # Data MCP Servers
-  - mcp/sports-data
-  - mcp/historical-data
-  - mcp/weather-data
+  - mcp/data              # Team stats, historical data
+  - mcp/intelligence      # Weather data
 
   # Python functions
-  - function/ml            # ml_predict function
-  - function/form          # form_score function
+  - function/ml           # ml_predict
+  - function/statistical  # form_score
 conversation_manager:
   type: sliding_window
   window_size: 10
