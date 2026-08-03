@@ -19,9 +19,9 @@ mcp_servers:
     description: "Sports data, odds, and historical statistics"
     endpoints:
       local: "http://localhost:8001"
-      dev: "http://sipap-data-mcp-dev.us-east-1.elb.amazonaws.com"
-      staging: "http://sipap-data-mcp-staging.us-east-1.elb.amazonaws.com"
-      prod: "http://sipap-data-mcp.us-east-1.elb.amazonaws.com"
+      dev: "${DATA_MCP_URL}"
+      staging: "${DATA_MCP_URL}"
+      prod: "${DATA_MCP_URL}"
     timeout: 5.0
     retry:
       max_attempts: 3
@@ -43,9 +43,9 @@ mcp_servers:
     description: "AI-powered news sentiment and weather intelligence"
     endpoints:
       local: "http://localhost:8002"
-      dev: "http://sipap-intelligence-mcp-dev.us-east-1.elb.amazonaws.com"
-      staging: "http://sipap-intelligence-mcp-staging.us-east-1.elb.amazonaws.com"
-      prod: "http://sipap-intelligence-mcp.us-east-1.elb.amazonaws.com"
+      dev: "${INTELLIGENCE_MCP_URL}"
+      staging: "${INTELLIGENCE_MCP_URL}"
+      prod: "${INTELLIGENCE_MCP_URL}"
     timeout: 10.0  # Higher timeout for AI processing
     retry:
       max_attempts: 2
