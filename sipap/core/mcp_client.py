@@ -93,13 +93,29 @@ class MCPClient:
         # Initialize AWS Lambda URL signer for automatic request signing
         self._aws_signer = AWSLambdaURLSigner(logger=self.logger)
 
-        # Create HTTP client with connection pooling and AWS signing
-        self.client = httpx.AsyncClient(
-            base_url=self.base_url,
-            timeout=self.timeout,
-            follow_redirects=True,
-            event_hooks={"request": [self._aws_signer.sign_request]},
-        )
+        # HTTP client (lazy-initialized on first use to ensure it binds to the correct event loop)
+        self._client: httpx.AsyncClient | None = None
+
+    @property
+    def client(self) -> httpx.AsyncClient:
+        """
+        Get HTTP client, creating it lazily if needed.
+
+        Lazy initialization ensures the client is created inside an async context
+        with the event loop running, preventing "Event loop is closed" errors.
+
+        Returns:
+            httpx.AsyncClient instance
+        """
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                base_url=self.base_url,
+                timeout=self.timeout,
+                follow_redirects=True,
+                event_hooks={"request": [self._aws_signer.sign_request]},
+            )
+            self.logger.debug(f"Created httpx client for {self.name}")
+        return self._client
 
     def _check_circuit_breaker(self) -> None:
         """
@@ -346,8 +362,10 @@ class MCPClient:
 
     async def close(self) -> None:
         """Close HTTP client and cleanup resources."""
-        await self.client.aclose()
-        self.logger.debug(f"Closed MCP client: {self.name}")
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+            self.logger.debug(f"Closed MCP client: {self.name}")
 
     async def __aenter__(self) -> "MCPClient":
         """Context manager entry."""
