@@ -421,54 +421,61 @@ def daemon_loop(
     """
     logger.info("Starting daemon polling loop")
 
-    while not shutdown_event.is_set():
-        try:
-            # Update heartbeat
-            heartbeat.record_poll()
+    # Create event loop once and reuse for all messages
+    # This prevents "Event loop is closed" errors with cached httpx clients in MCP factory
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
-            # Poll SQS (20-second long polling)
-            messages = sqs_adapter.receive_messages(max_messages=1, wait_time=20)
-
-            if not messages:
-                # No messages, loop again
-                continue
-
-            # Process message
-            message = messages[0]
-
-            # Run async processing in event loop
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+    try:
+        while not shutdown_event.is_set():
             try:
+                # Update heartbeat
+                heartbeat.record_poll()
+
+                # Poll SQS (20-second long polling)
+                messages = sqs_adapter.receive_messages(max_messages=1, wait_time=20)
+
+                if not messages:
+                    # No messages, loop again
+                    continue
+
+                # Process message
+                message = messages[0]
+
+                # Run async processing in shared event loop (reused across messages)
                 success = loop.run_until_complete(
                     process_message(
                         message, orchestrator, sqs_adapter, heartbeat, twilio_client
                     )
                 )
-            finally:
-                loop.close()
 
-            if not success:
-                # Processing failed (logged in process_message)
-                pass
+                if not success:
+                    # Processing failed (logged in process_message)
+                    pass
 
-            # Brief pause between polls
-            time.sleep(poll_interval)
+                # Brief pause between polls
+                time.sleep(poll_interval)
 
-        except KeyboardInterrupt:
-            # Handle Ctrl+C gracefully
-            logger.info("Received KeyboardInterrupt, shutting down...")
-            shutdown_event.set()
-            break
+            except KeyboardInterrupt:
+                # Handle Ctrl+C gracefully
+                logger.info("Received KeyboardInterrupt, shutting down...")
+                shutdown_event.set()
+                break
 
-        except Exception as e:
-            # Unexpected error in daemon loop itself
-            logger.error(
-                f"Unexpected error in daemon loop: {type(e).__name__}: {e}",
-                exc_info=True
-            )
-            heartbeat.record_failure(f"Daemon loop error: {type(e).__name__}")
-            time.sleep(5)  # Backoff on error
+            except Exception as e:
+                # Unexpected error in daemon loop itself
+                logger.error(
+                    f"Unexpected error in daemon loop: {type(e).__name__}: {e}",
+                    exc_info=True
+                )
+                heartbeat.record_failure(f"Daemon loop error: {type(e).__name__}")
+                time.sleep(5)  # Backoff on error
+
+    finally:
+        # Close event loop on shutdown
+        logger.info("Closing event loop...")
+        loop.close()
+        logger.info("Event loop closed")
 
     # Graceful shutdown
     heartbeat.record_shutdown()
