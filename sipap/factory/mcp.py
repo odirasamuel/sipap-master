@@ -192,7 +192,7 @@ class MCPFactory:
         self.logger.info(
             f"Created MCP client: {server_name}",
             extra={
-                "name": mcp_name,
+                "mcp_name": mcp_name,
                 "base_url": base_url,
                 "environment": self.environment,
             },
