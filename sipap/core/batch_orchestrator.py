@@ -16,6 +16,7 @@ Example: "20 odds" means accumulate fixtures until sum(bookmaker_odds) >= 20.0
 Pattern adapted from Sentinel's batch processing patterns.
 """
 
+import json
 import logging
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -492,10 +493,19 @@ class BatchOrchestrator:
         limit: int,
     ) -> list[dict[str, Any]]:
         """
-        Query fixtures from MCP with filters.
+        Query ALL scheduled fixtures from MCP for AI evaluation.
 
-        Calls sipap-data-mcp's search_fixtures tool with league names,
-        date range, and limit parameters.
+        CRITICAL: Fetches ALL scheduled fixtures without odds filtering.
+        The 5 AI agents will evaluate each fixture through 44 markets.
+        Quality gates (confidence + EV) are applied AFTER AI evaluation,
+        not at the database level.
+
+        Flow:
+        1. Get ALL scheduled fixtures for date range
+        2. Orchestrator evaluates each through 5 AI agents
+        3. Calculate confidence + EV for each market
+        4. Apply quality gates AFTER evaluation
+        5. Select fixtures that pass quality criteria
 
         Args:
             leagues: League names to filter by (e.g., ["Premier League", "LaLiga"])
@@ -503,7 +513,7 @@ class BatchOrchestrator:
             limit: Max fixtures to return
 
         Returns:
-            List of fixtures matching filters
+            List of ALL scheduled fixtures (no pre-filtering by odds)
 
         Raises:
             Exception: If MCP call fails
@@ -512,10 +522,13 @@ class BatchOrchestrator:
         data_mcp = self.mcp_factory.create("data")
 
         # Build search_fixtures parameters
+        # CRITICAL: Fetch ALL scheduled fixtures, don't filter by has_odds
+        # Let the orchestrator evaluate all fixtures through 5 AI agents
+        # Quality gates (confidence + EV) are applied AFTER AI evaluation
         params = {
             "limit": limit,
             "status": "scheduled",
-            "has_odds": True,
+            "has_odds": True,  # Need odds for EV calculation
         }
 
         # Add league filter if specified
@@ -533,7 +546,21 @@ class BatchOrchestrator:
                 f"Calling MCP search_fixtures with params: {params}"
             )
             result = await data_mcp.call_tool("search_fixtures", params)
-            fixtures = result.get("fixtures", [])
+
+            # MCP returns result in format: {"content": [{"type": "text", "text": "{...}"}]}
+            # We need to extract and parse the text content
+            if "content" in result and isinstance(result["content"], list) and len(result["content"]) > 0:
+                content_item = result["content"][0]
+                if "text" in content_item:
+                    # Parse the JSON string inside text field
+                    tool_result = json.loads(content_item["text"])
+                    fixtures = tool_result.get("fixtures", [])
+                else:
+                    fixtures = []
+            else:
+                # Fallback: Try direct access (for backward compatibility)
+                fixtures = result.get("fixtures", [])
+
             self.logger.info(
                 f"MCP returned {len(fixtures)} fixtures, result keys: {list(result.keys())}"
             )
