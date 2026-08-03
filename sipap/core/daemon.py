@@ -225,7 +225,7 @@ async def process_whatsapp_message(
 async def send_whatsapp_response(
     phone: str,
     response: dict[str, Any],
-    twilio_client: "TwilioWhatsAppClient" | None
+    twilio_client: TwilioWhatsAppClient | None
 ) -> bool:
     """Send WhatsApp response via Twilio API.
 
