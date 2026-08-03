@@ -17,7 +17,7 @@ Pattern adapted from Sentinel's batch processing patterns.
 """
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sipap.conversation import RequestIntent
@@ -148,7 +148,23 @@ class BatchOrchestrator:
             quality_threshold, self.quality_thresholds["high"]
         )
 
-        # Step 2: Query fixtures with filters
+        # Step 2: Incremental date expansion if no date range specified
+        # Start with today, expand day-by-day until target odds reached
+        if intent.date_range is None:
+            self.logger.info(
+                "No date range specified - using incremental expansion starting from today"
+            )
+            result = await self._process_with_incremental_expansion(
+                user_id=user_id,
+                target=target,
+                quality_threshold=quality_threshold,
+                thresholds=thresholds,
+                leagues=intent.leagues,
+                max_days=7,  # Maximum 7 days expansion
+            )
+            return result
+
+        # Step 2 (fallback): Query fixtures with explicit date range
         try:
             fixtures = await self._get_filtered_matches(
                 leagues=intent.leagues,
@@ -269,6 +285,200 @@ class BatchOrchestrator:
                 "target_odds": target,
                 "num_selections": len(selections),
                 "fixtures_evaluated": len(fixtures),
+                "failed_predictions": failed_predictions,
+            },
+        )
+
+        return result
+
+    async def _process_with_incremental_expansion(
+        self,
+        user_id: str,
+        target: float,
+        quality_threshold: str,
+        thresholds: dict[str, float],
+        leagues: list[str] | None,
+        max_days: int = 7,
+    ) -> dict[str, Any]:
+        """
+        Process batch prediction with incremental date range expansion.
+
+        Starts with today only, then expands day-by-day until target odds reached
+        or max_days limit hit.
+
+        Strategy:
+        1. Start with today (day 0)
+        2. Query fixtures, predict, accumulate
+        3. If target not reached, expand to today + 1 day
+        4. Query NEW day's fixtures only, predict, accumulate
+        5. Repeat until target reached or max_days hit
+
+        Args:
+            user_id: User identifier
+            target: Target accumulated odds
+            quality_threshold: Quality level ("highest", "high", "medium")
+            thresholds: Quality gate thresholds
+            leagues: Optional league filters
+            max_days: Maximum days to expand (default: 7)
+
+        Returns:
+            Batch prediction result with accumulated odds and selections
+        """
+        today = date.today()
+        accumulated_sum = 0.0
+        selections = []
+        failed_predictions = 0
+        days_expanded = 0
+        all_fixtures_processed = set()  # Track fixture IDs to avoid duplicates
+
+        self.logger.info(
+            f"Starting incremental expansion from today ({today.isoformat()}) "
+            f"until {target} odds accumulated (max {max_days} days)"
+        )
+
+        # Expand day by day until target reached or max_days hit
+        for day_offset in range(max_days):
+            current_date = today + timedelta(days=day_offset)
+            date_range = {
+                "start": current_date.isoformat(),
+                "end": current_date.isoformat(),
+            }
+
+            self.logger.info(
+                f"Day {day_offset + 1}/{max_days}: Querying fixtures for {current_date.isoformat()} "
+                f"(current accumulated: {accumulated_sum:.1f}/{target})"
+            )
+
+            # Query fixtures for current day
+            try:
+                fixtures = await self._get_filtered_matches(
+                    leagues=leagues,
+                    date_range=date_range,
+                    limit=100,
+                )
+            except Exception as e:
+                self.logger.error(
+                    f"Failed to query fixtures for {current_date.isoformat()}: {e}",
+                    exc_info=True,
+                )
+                failed_predictions += 1
+                continue
+
+            if not fixtures:
+                self.logger.info(
+                    f"No fixtures found for {current_date.isoformat()}, expanding to next day"
+                )
+                days_expanded += 1
+                continue
+
+            self.logger.info(
+                f"Found {len(fixtures)} fixtures for {current_date.isoformat()}"
+            )
+
+            # Process each fixture for this day
+            for fixture in fixtures:
+                fixture_id = fixture.get("id")
+
+                # Skip if already processed (shouldn't happen but safety check)
+                if fixture_id in all_fixtures_processed:
+                    continue
+                all_fixtures_processed.add(fixture_id)
+
+                # Stop if target reached
+                if accumulated_sum >= target:
+                    self.logger.info(
+                        f"Target reached! {accumulated_sum:.1f} >= {target} "
+                        f"after {day_offset + 1} days"
+                    )
+                    break
+
+                # Predict fixture
+                try:
+                    analysis = await self._predict_fixture(fixture, user_id)
+
+                    # Apply quality gates
+                    if (
+                        analysis["confidence"] >= thresholds["min_confidence"]
+                        and analysis["ev"] >= thresholds["min_ev"]
+                    ):
+                        selections.append(analysis)
+                        accumulated_sum += analysis["bookmaker_odd"]
+
+                        self.logger.info(
+                            f"✅ Added {fixture.get('home_team')} vs {fixture.get('away_team')} "
+                            f"(date: {current_date.isoformat()}, "
+                            f"odd: {analysis['bookmaker_odd']}, "
+                            f"accumulated: {accumulated_sum:.1f}/{target})"
+                        )
+                    else:
+                        self.logger.debug(
+                            f"❌ Rejected {fixture.get('home_team')} vs {fixture.get('away_team')} "
+                            f"(conf: {analysis['confidence']:.2f} < {thresholds['min_confidence']}, "
+                            f"ev: {analysis['ev']:.2f} < {thresholds['min_ev']})"
+                        )
+
+                except Exception as e:
+                    self.logger.error(
+                        f"Prediction failed for fixture {fixture_id}: {e}",
+                        exc_info=True,
+                    )
+                    failed_predictions += 1
+                    continue
+
+            # Check if target reached after processing this day
+            if accumulated_sum >= target:
+                self.logger.info(
+                    f"🎯 Target achieved! {accumulated_sum:.1f} odds from {len(selections)} fixtures "
+                    f"across {day_offset + 1} day(s)"
+                )
+                break
+
+            days_expanded += 1
+
+        # Build final date range for reporting
+        final_date_range = {
+            "start": today.isoformat(),
+            "end": (today + timedelta(days=days_expanded)).isoformat(),
+        }
+
+        # Build result
+        warning = None
+        if accumulated_sum < target:
+            warning = (
+                f"Only accumulated {accumulated_sum:.1f} odds (target: {target}) "
+                f"after expanding to {days_expanded + 1} day(s). "
+                f"Not enough fixtures met your quality criteria "
+                f"(confidence >= {thresholds['min_confidence']:.0%}, "
+                f"EV >= {thresholds['min_ev']:.0%})."
+            )
+
+        if failed_predictions > 0:
+            failures_msg = f"{failed_predictions} prediction(s) failed."
+            warning = f"{warning} {failures_msg}" if warning else failures_msg
+
+        result = {
+            "accumulated_odds": accumulated_sum,
+            "target_odds": target,
+            "selections": selections,
+            "filters_applied": {
+                "leagues": leagues,
+                "date_range": final_date_range,
+                "quality_threshold": quality_threshold,
+                "thresholds": thresholds,
+                "days_expanded": days_expanded + 1,
+            },
+            "warning": warning,
+            "error": None,
+        }
+
+        self.logger.info(
+            "Incremental expansion complete",
+            extra={
+                "user_id": user_id,
+                "accumulated_odds": accumulated_sum,
+                "target_odds": target,
+                "num_selections": len(selections),
+                "days_expanded": days_expanded + 1,
                 "failed_predictions": failed_predictions,
             },
         )
