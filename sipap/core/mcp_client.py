@@ -20,6 +20,8 @@ from uuid import uuid4
 import httpx
 from pydantic import BaseModel
 
+from sipap.aws.signing import AWSLambdaURLSigner
+
 
 class MCPRequest(BaseModel):
     """JSON-RPC 2.0 request structure."""
@@ -88,11 +90,15 @@ class MCPClient:
         self._failure_threshold = 5  # Open circuit after 5 consecutive failures
         self._recovery_timeout = 60.0  # Try to recover after 60 seconds
 
-        # Create HTTP client with connection pooling
+        # Initialize AWS Lambda URL signer for automatic request signing
+        self._aws_signer = AWSLambdaURLSigner(logger=self.logger)
+
+        # Create HTTP client with connection pooling and AWS signing
         self.client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=self.timeout,
             follow_redirects=True,
+            event_hooks={"request": [self._aws_signer.sign_request]},
         )
 
     def _check_circuit_breaker(self) -> None:
