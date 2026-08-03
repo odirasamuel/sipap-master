@@ -319,8 +319,14 @@ class BatchOrchestrator:
 
         # Call search_fixtures tool
         try:
+            self.logger.info(
+                f"Calling MCP search_fixtures with params: {params}"
+            )
             result = await data_mcp.call_tool("search_fixtures", params)
             fixtures = result.get("fixtures", [])
+            self.logger.info(
+                f"MCP returned {len(fixtures)} fixtures, result keys: {list(result.keys())}"
+            )
 
             self.logger.info(
                 f"Retrieved {len(fixtures)} fixtures from MCP",
