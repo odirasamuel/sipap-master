@@ -80,23 +80,18 @@ python examples/example_statistical_functions.py
 
 ---
 
-### Example 2: ML Prediction
+### Example 2: Form Pattern Analysis
 
-**Purpose:** Demonstrates the machine learning prediction pipeline that powers the ML Agent.
-
-**Run:**
-
-```bash
-python examples/example_ml_prediction.py
-```
+**Purpose:** Demonstrates form pattern detection tools that power the Form Agent.
 
 **What it demonstrates:**
 
-- **Feature Engineering:** Extract 12 features from match context
-- **ML Prediction:** Generate probability predictions (simplified for MVP)
-- **Confidence Calculation:** Assess prediction certainty
+- **Momentum Detection:** Winning/losing streaks
+- **Trajectory Analysis:** Improving/declining patterns
+- **Consistency Scoring:** Form volatility measurement
+- **Pattern Ratings:** 0-100 normalized scores
 
-**Output:** Step-by-step walkthrough of the ML pipeline with Liverpool vs Manchester United example.
+**Note:** ML Agent has been removed from MVP. For post-MVP ML implementation, see `/Users/charlesotuya/AI-Odi/sentinel/future_considerations.md`
 
 **Key Learnings:**
 
@@ -128,9 +123,10 @@ python examples/example_ensemble_prediction.py
 
 **Key Learnings:**
 
-- How agents are weighted (ML 30%, Statistical 25%, Form 20%, Market 15%, News 10%)
+- How agents are weighted (Statistical 40%, Form 40%, News 20%)
+- Market Agent role: Compares ensemble prediction vs market odds (not in ensemble)
 - Confidence calculation from agent agreement
-- Quality gate enforcement (55% confidence, 50% probability, 3/5 consensus)
+- Quality gate enforcement (55% confidence, 50% probability, 2/3 consensus)
 - Why low-confidence predictions are blocked
 
 ---
@@ -395,10 +391,10 @@ from sipap.tools.function.statistical import (
 ### ML Functions (`sipap/tools/function/ml.py`)
 
 ```python
-from sipap.tools.function.ml import (
-    ml_predict,           # Main prediction function
-    engineer_features,    # Extract features from context
-    calculate_confidence  # Confidence from probabilities
+from sipap.tools.function.statistical import (
+    poisson_model,        # Poisson-based predictions
+    regression_model,     # Regression-based predictions
+    form_score            # Recent form analysis
 )
 ```
 
@@ -493,14 +489,14 @@ Once Phase 2 MCP servers are available:
 3. Connect to `sipap-odds-intelligence-mcp` for market data
 4. Connect to `sipap-news-intelligence-mcp` for contextual data
 
-### Train Real ML Models
+### Add More Statistical Tools
 
-Replace simplified ML prediction with XGBoost:
+Enhance the Statistical Agent with additional analysis tools:
 
-1. Train model on historical match data
-2. Save model to S3
-3. Update `ml_predict()` to load real model
-4. Achieve 60%+ accuracy on test set
+1. Add xG (expected goals) analysis
+2. Implement player-level statistics
+3. Add tactical analysis (formation impacts)
+4. Integrate advanced metrics (PPDA, field tilt)
 
 ### Deploy to Production
 
@@ -535,11 +531,11 @@ pytest tests/unit/test_orchestrator.py -v
 
 Located in `sipap/sports/soccer/agents/`:
 
-- `statistical.yml` - Statistical Agent configuration
-- `ml.yml` - ML Agent configuration
-- `form.yml` - Form Agent configuration
-- `market.yml` - Market Agent configuration
-- `news.yml` - News Agent configuration
+- `statistical.yml` - Statistical Agent (40% weight) - Historical analysis
+- `form.yml` - Form Agent (40% weight) - Recent patterns
+- `news.yml` - News Agent (20% weight) - Contextual adjustments
+- `market.yml` - Market Agent (separate) - +EV detection
+- `nlu.yml` - NLU Agent - User query understanding
 
 ---
 
