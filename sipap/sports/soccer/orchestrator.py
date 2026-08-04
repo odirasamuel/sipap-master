@@ -969,11 +969,11 @@ Focus on your specialized analysis approach based on your role.
         """
         # Weighted average (weights based on historical accuracy)
         weights = {
-            "statistical": 0.25,
-            "ml": 0.30,
-            "form": 0.20,
-            "market": 0.15,
-            "news": 0.10
+            "statistical": 0.30,  # Increased: Primary data-driven analysis
+            "form": 0.30,         # Increased: Recent performance patterns
+            "ml": 0.20,           # Adjusted: Machine learning patterns
+            "market": 0.10,       # Adjusted: Bookmaker odds analysis
+            "news": 0.10          # Contextual factors (injuries, team news)
         }
 
         # Extract probabilities and calculate weighted average
