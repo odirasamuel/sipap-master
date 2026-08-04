@@ -6,7 +6,7 @@ model:
   temperature: 0.3
 tools:
   - mcp/data              # Match context
-  # Claude can use WebFetch natively to read news sites
+  - function/web          # web_fetch for fetching news sites
 conversation_manager:
   type: sliding_window
   window_size: 10

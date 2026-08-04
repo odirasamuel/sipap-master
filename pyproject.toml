@@ -48,6 +48,9 @@ dependencies = [
     # HTTP client for MCP calls
     "httpx>=0.25.0",
 
+    # Web content extraction
+    "beautifulsoup4>=4.12.0",
+
     # FastAPI for HTTP API
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
@@ -137,6 +140,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "pydantic.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "bs4.*"
 ignore_missing_imports = true
 
 [tool.ruff]
