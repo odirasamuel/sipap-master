@@ -10,6 +10,7 @@ import logging
 from typing import Any
 
 from sipap.conversation import ConversationManager, NLUAgent, RequestIntent
+from sipap.conversation.nlu_agent import ClarificationResponse
 from sipap.core.batch_orchestrator import BatchOrchestrator
 from sipap.factory.mcp import MCPFactory
 from sipap.sports.soccer.orchestrator import SoccerOrchestrator
@@ -323,16 +324,54 @@ class MainOrchestrator:
                 },
             )
 
+            # Step 3.5: Check if clarification is needed
+            if self.nlu_agent.needs_clarification(intent):
+                self.logger.info(
+                    "Generating clarification",
+                    extra={"user_id": user_id, "confidence": intent.confidence},
+                )
+
+                clarification = await self.nlu_agent.generate_clarification(intent, context)
+
+                # Format clarification for WhatsApp
+                clarification_message = self._format_clarification_response(clarification)
+
+                # Save clarification context for follow-up
+                if clarification.follow_up_context:
+                    self.conversation_manager.update_context(user_id, clarification.follow_up_context)
+
+                response = {
+                    "message": clarification_message,
+                    "intent": "clarification_needed",
+                    "data": {
+                        "clarification_type": clarification.clarification_type,
+                        "original_intent": intent.intent_type,
+                        "confidence": intent.confidence,
+                    },
+                    "error": None,
+                }
+
+                self.conversation_manager.add_assistant_message(user_id, response["message"])
+                return response
+
         except Exception as e:
             self.logger.error(f"NLU parsing failed: {e}", exc_info=True)
+
+            # Even on exception, try to generate helpful response
+            from sipap.conversation.nlu_agent import RequestIntent
+
+            unknown_intent = RequestIntent(
+                intent_type="unknown",
+                confidence=0.0,
+                original_query=message,
+                extracted_entities={},
+            )
+
+            clarification = await self.nlu_agent.generate_clarification(unknown_intent, context)
+            clarification_message = self._format_clarification_response(clarification)
+
             response = {
-                "message": (
-                    "I'm having trouble understanding your request. "
-                    "Could you please rephrase? Try:\n"
-                    "- 'Give me 20 odds with highest success chance'\n"
-                    "- 'Show me Arsenal vs Chelsea prediction'\n"
-                    "- 'Updates on your selections'"
-                ),
+                "message": clarification_message,
                 "intent": "unknown",
                 "data": None,
                 "error": f"NLU parsing error: {str(e)}",
@@ -360,6 +399,10 @@ class MainOrchestrator:
                 "data": None,
                 "error": None,
             }
+
+        elif intent.intent_type == "get_match_results":
+            # Get actual match results (live or finished) from Intelligence MCP
+            result = await self._handle_get_match_results(intent, user_id)
 
         elif intent.intent_type == "explain":
             # Explanation feature (future)
@@ -398,17 +441,21 @@ class MainOrchestrator:
             }
 
         else:
-            # Unknown intent
+            # Unknown intent - generate clarification
+            clarification = await self.nlu_agent.generate_clarification(intent, context)
+            clarification_message = self._format_clarification_response(clarification)
+
+            # Save clarification context for follow-up
+            if clarification.follow_up_context:
+                self.conversation_manager.update_context(user_id, clarification.follow_up_context)
+
             result = {
-                "message": (
-                    f"I didn't understand your request (confidence: {intent.confidence:.1%}). "
-                    "Could you rephrase? Try:\n"
-                    "- 'Give me 20 odds with highest success chance'\n"
-                    "- 'Show me Arsenal vs Chelsea prediction'\n"
-                    "- 'Updates on your selections'"
-                ),
+                "message": clarification_message,
                 "intent": "unknown",
-                "data": {"parsed_intent": intent.dict() if hasattr(intent, "dict") else None},
+                "data": {
+                    "parsed_intent": intent.dict() if hasattr(intent, "dict") else None,
+                    "clarification_type": clarification.clarification_type,
+                },
                 "error": None,
             }
 
@@ -416,6 +463,56 @@ class MainOrchestrator:
         self.conversation_manager.add_assistant_message(user_id, result["message"])
 
         return result
+
+    def _format_clarification_response(self, clarification: ClarificationResponse) -> str:
+        """
+        Format clarification response for WhatsApp display.
+
+        Args:
+            clarification: ClarificationResponse object
+
+        Returns:
+            Formatted WhatsApp message
+
+        Example:
+            >>> clarification = ClarificationResponse(
+            ...     clarification_type="ask_for_missing_entity",
+            ...     message="Which match are you interested in?",
+            ...     suggested_actions=[{"number": "1", "label": "Example", "example": "Arsenal vs Chelsea"}]
+            ... )
+            >>> formatted = orchestrator._format_clarification_response(clarification)
+            >>> assert "Which match" in formatted
+            >>> assert "1️⃣" in formatted
+        """
+        lines = [clarification.message]
+
+        # Add suggested actions if present
+        if clarification.suggested_actions and len(clarification.suggested_actions) > 0:
+            lines.append("")  # Blank line before actions
+
+            # Number emoji mapping
+            number_emojis = {
+                "1": "1️⃣",
+                "2": "2️⃣",
+                "3": "3️⃣",
+                "4": "4️⃣",
+                "5": "5️⃣",
+            }
+
+            for action in clarification.suggested_actions:
+                number = action.get("number", "")
+                label = action.get("label", "")
+                example = action.get("example")
+
+                emoji = number_emojis.get(number, f"{number}.")
+
+                if example:
+                    lines.append(f"{emoji} {label}")
+                    lines.append(f"   Example: '{example}'")
+                else:
+                    lines.append(f"{emoji} {label}")
+
+        return "\n".join(lines)
 
     async def _handle_batch_prediction(
         self,
@@ -646,6 +743,123 @@ class MainOrchestrator:
             return {
                 "message": f"❌ Prediction error: {str(e)}",
                 "intent": "single_prediction",
+                "data": None,
+                "error": str(e),
+            }
+
+    async def _handle_get_match_results(
+        self,
+        intent: RequestIntent,
+        user_id: str,
+    ) -> dict[str, Any]:
+        """
+        Handle match results request (live or finished matches).
+
+        Calls Intelligence MCP's get_match_results tool to fetch real-time
+        match scores and status from API-Football.
+
+        Args:
+            intent: Parsed user intent with filters (date, league, team, status)
+            user_id: User identifier
+
+        Returns:
+            Response dictionary with match results
+        """
+        from datetime import UTC, datetime
+
+        try:
+            # Get Intelligence MCP client
+            intelligence_mcp = self.mcp_factory.get_client("intelligence")
+
+            # Prepare parameters for get_match_results tool
+            params: dict[str, Any] = {}
+
+            # Determine date (default to today)
+            if intent.date_range:
+                params["date"] = intent.date_range.get("start")
+            else:
+                params["date"] = datetime.now(UTC).date().isoformat()
+
+            # Add league filter if provided
+            if intent.leagues and len(intent.leagues) > 0:
+                params["league_name"] = intent.leagues[0]
+
+            # Add team filter if provided
+            if intent.home_team:
+                params["team_name"] = intent.home_team
+            elif intent.away_team:
+                params["team_name"] = intent.away_team
+
+            # Determine status (live vs finished)
+            # If user says "live", "happening now" -> status = "LIVE"
+            # If user says "results", "scores" -> status = "FT"
+            # Default to "ALL" to show both
+            params["status"] = "ALL"  # Show both live and finished by default
+
+            # Call Intelligence MCP tool
+            result = await intelligence_mcp.call_tool("get_match_results", params)
+
+            # Extract matches from result
+            matches = result.get("matches", [])
+            count = result.get("count", 0)
+
+            # Format results for user
+            if count == 0:
+                message = (
+                    "No matches found matching your criteria. "
+                    "Try a different date or league."
+                )
+                return {
+                    "message": message,
+                    "intent": "get_match_results",
+                    "data": result,
+                    "error": None,
+                }
+
+            # Format match results for WhatsApp
+            lines = [f"📊 Match Results ({count} matches):\n"]
+
+            for match in matches[:10]:  # Limit to 10 matches for WhatsApp
+                fixture = match.get("fixture", {})
+                teams = match.get("teams", {})
+                goals = match.get("goals", {})
+                league = match.get("league", {})
+
+                home_team = teams.get("home", {}).get("name", "Unknown")
+                away_team = teams.get("away", {}).get("name", "Unknown")
+                home_goals = goals.get("home")
+                away_goals = goals.get("away")
+                status = fixture.get("status", {}).get("short", "")
+                league_name = league.get("name", "")
+
+                # Format score display
+                if home_goals is not None and away_goals is not None:
+                    score_display = f"{home_team} {home_goals}-{away_goals} {away_team}"
+                else:
+                    score_display = f"{home_team} vs {away_team}"
+
+                # Add status indicator
+                status_emoji = "🟢" if status == "LIVE" else "✅" if status == "FT" else "⏰"
+
+                lines.append(f"{status_emoji} {score_display} [{league_name}]")
+
+            if count > 10:
+                lines.append(f"\n... and {count - 10} more matches")
+
+            message = "\n".join(lines)
+
+            return {
+                "message": message,
+                "intent": "get_match_results",
+                "data": result,
+                "error": None,
+            }
+
+        except Exception as e:
+            self.logger.error(f"Get match results failed: {e}", exc_info=True)
+            return {
+                "message": f"❌ Error fetching match results: {str(e)}",
+                "intent": "get_match_results",
                 "data": None,
                 "error": str(e),
             }

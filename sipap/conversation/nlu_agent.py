@@ -49,6 +49,7 @@ class RequestIntent(BaseModel):
         "batch_prediction",  # User wants accumulated odds from multiple fixtures
         "single_prediction",  # User wants one specific match prediction
         "track_results",  # User asks for results of previous predictions
+        "get_match_results",  # User wants actual match results/scores (live or finished)
         "explain",  # User wants explanation of a prediction
         "show_fixtures",  # User wants to see available fixtures (no predictions)
         "check_odds",  # User wants to check odds
@@ -117,7 +118,10 @@ class NLUAgent:
         # Claude agent will be initialized lazily
         self._claude_agent: Any | None = None
 
-        self.logger.info("NLUAgent initialized with Claude + regex fallback")
+        # Clarification agent for intelligent error handling
+        self.clarification_agent = ClarificationAgent(logger=self.logger)
+
+        self.logger.info("NLUAgent initialized with Claude + regex fallback + clarification")
 
     async def parse_user_message(
         self,
@@ -193,6 +197,90 @@ class NLUAgent:
             original_query=message,
             extracted_entities={},
         )
+
+    def needs_clarification(self, intent: RequestIntent) -> bool:
+        """
+        Determine if an intent needs clarification.
+
+        Clarification is needed when:
+        1. Confidence < 0.7 (uncertain intent)
+        2. Intent is "unknown"
+        3. Intent is clear but missing critical entities
+        4. Parameters are vague or problematic
+
+        Args:
+            intent: Parsed intent
+
+        Returns:
+            True if clarification is needed
+
+        Example:
+            >>> intent = RequestIntent(
+            ...     intent_type="single_prediction",
+            ...     confidence=0.7,
+            ...     home_team=None,
+            ...     away_team=None,
+            ...     original_query="Show me the prediction"
+            ... )
+            >>> assert nlu.needs_clarification(intent) == True
+        """
+        # Always clarify unknown intents
+        if intent.intent_type == "unknown":
+            return True
+
+        # Clarify low confidence intents
+        if intent.confidence < 0.7:
+            return True
+
+        # Check for missing critical entities based on intent type
+        if intent.intent_type == "single_prediction":
+            if not intent.home_team and not intent.away_team and not intent.match_id:
+                return True
+
+        if intent.intent_type == "batch_prediction":
+            # Missing target_odds is acceptable (system defaults to 20)
+            # But if target_odds > 80, clarify to refine
+            if intent.target_odds and intent.target_odds > 80:
+                return True
+
+        if intent.intent_type == "get_match_results":
+            # Missing league and team means no filter (show all results)
+            # But very broad, might want to clarify
+            if not intent.leagues and not intent.home_team and not intent.away_team:
+                # Only clarify if confidence is not high
+                if intent.confidence < 0.8:
+                    return True
+
+        return False
+
+    async def generate_clarification(
+        self,
+        intent: RequestIntent,
+        conversation_context: dict[str, Any] | None = None,
+    ) -> ClarificationResponse:
+        """
+        Generate intelligent clarification for unclear intent.
+
+        Delegates to ClarificationAgent to analyze the intent and generate
+        contextual, helpful clarification messages.
+
+        Args:
+            intent: Parsed intent needing clarification
+            conversation_context: Optional conversation context
+
+        Returns:
+            ClarificationResponse with message and suggested actions
+
+        Example:
+            >>> intent = RequestIntent(
+            ...     intent_type="unknown",
+            ...     confidence=0.2,
+            ...     original_query="Give me something"
+            ... )
+            >>> clarification = await nlu.generate_clarification(intent)
+            >>> assert clarification.clarification_type == "guide_to_feature"
+        """
+        return await self.clarification_agent.generate_clarification(intent, conversation_context)
 
     async def _parse_with_claude(
         self,
@@ -551,4 +639,352 @@ class NLUAgent:
             ),
             original_query=original_query,
             extracted_entities=entities,
+        )
+
+
+class ClarificationResponse(BaseModel):
+    """Structured clarification response for unclear user requests."""
+
+    clarification_type: Literal[
+        "ask_for_missing_entity",  # Know intent but missing key info
+        "disambiguate_intent",  # Multiple possible intents
+        "guide_to_feature",  # Very unclear, guide to capabilities
+        "refine_request",  # Intent clear but parameters vague
+    ]
+    message: str  # Friendly clarification message for WhatsApp user
+    suggested_actions: list[dict[str, Any]]  # Numbered actions with examples
+    follow_up_context: dict[str, Any] | None = None  # Context to preserve
+
+    model_config = ConfigDict(frozen=False)
+
+
+class ClarificationAgent:
+    """
+    Generates intelligent clarification messages for unclear user requests.
+
+    Uses Claude AI to analyze low-confidence intents and generate contextual,
+    helpful responses that guide users toward what they need.
+
+    Strategies:
+    1. ask_for_missing_entity: Intent clear, missing critical data
+    2. disambiguate_intent: Multiple possible interpretations
+    3. guide_to_feature: Very unclear, show capabilities
+    4. refine_request: Intent clear but parameters vague
+
+    Example:
+        >>> clarifier = ClarificationAgent()
+        >>> response = await clarifier.generate_clarification(
+        ...     intent=RequestIntent(
+        ...         intent_type="single_prediction",
+        ...         confidence=0.7,
+        ...         home_team=None,
+        ...         away_team=None,
+        ...         original_query="Show me the prediction"
+        ...     )
+        ... )
+        >>> print(response.message)
+        "I'd be happy to show you a prediction! Which match are you interested in?"
+    """
+
+    def __init__(self, logger: logging.Logger | None = None):
+        """Initialize clarification agent."""
+        self.logger = logger or get_logger(__name__)
+        self._claude_agent: Any | None = None
+        self.logger.info("ClarificationAgent initialized")
+
+    async def generate_clarification(
+        self,
+        intent: RequestIntent,
+        conversation_context: dict[str, Any] | None = None,
+    ) -> ClarificationResponse:
+        """
+        Generate intelligent clarification message for unclear intent.
+
+        Args:
+            intent: Parsed intent with low confidence or missing entities
+            conversation_context: Optional conversation history
+
+        Returns:
+            ClarificationResponse with message and suggested actions
+
+        Example:
+            >>> response = await clarifier.generate_clarification(
+            ...     intent=RequestIntent(
+            ...         intent_type="unknown",
+            ...         confidence=0.2,
+            ...         original_query="Give me something good",
+            ...         extracted_entities={}
+            ...     )
+            ... )
+            >>> assert response.clarification_type == "guide_to_feature"
+        """
+        conversation_context = conversation_context or {}
+
+        # Determine clarification strategy based on confidence and entities
+        clarification_type = self._determine_strategy(intent)
+
+        # For MVP, use rule-based clarification (Claude integration later)
+        response = await self._generate_with_rules(intent, clarification_type, conversation_context)
+
+        self.logger.info(
+            f"Generated clarification: {clarification_type}",
+            extra={"confidence": intent.confidence, "intent_type": intent.intent_type},
+        )
+
+        return response
+
+    def _determine_strategy(self, intent: RequestIntent) -> str:
+        """
+        Determine appropriate clarification strategy.
+
+        Decision tree:
+        1. If confidence < 0.4 and no useful entities → guide_to_feature
+        2. If confidence 0.4-0.6 with some entities → disambiguate_intent
+        3. If confidence ≥ 0.5 but missing critical entities → ask_for_missing_entity
+        4. If confidence ≥ 0.6 but vague parameters → refine_request
+
+        Args:
+            intent: Parsed intent
+
+        Returns:
+            Clarification strategy name
+        """
+        has_entities = bool(intent.extracted_entities and len(intent.extracted_entities) > 0)
+        has_teams = bool(intent.home_team or intent.away_team)
+        has_leagues = bool(intent.leagues and len(intent.leagues) > 0)
+
+        # Very low confidence, no useful entities
+        if intent.confidence < 0.4 and not has_entities:
+            return "guide_to_feature"
+
+        # Medium confidence with some context
+        if 0.4 <= intent.confidence < 0.6 and (has_leagues or has_teams or has_entities):
+            return "disambiguate_intent"
+
+        # Clear intent but missing critical data
+        if intent.confidence >= 0.5:
+            # Check for missing critical entities based on intent
+            if intent.intent_type == "single_prediction" and not has_teams:
+                return "ask_for_missing_entity"
+            if intent.intent_type == "batch_prediction" and intent.target_odds is None:
+                return "ask_for_missing_entity"
+            if intent.intent_type == "get_match_results" and not (has_leagues or has_teams):
+                return "ask_for_missing_entity"
+
+            # Has intent and entities but vague parameters
+            if intent.target_odds and intent.target_odds > 80:  # Too ambitious
+                return "refine_request"
+
+            # Default for moderate confidence
+            return "ask_for_missing_entity"
+
+        # Default fallback
+        return "guide_to_feature"
+
+    async def _generate_with_rules(
+        self,
+        intent: RequestIntent,
+        clarification_type: str,
+        context: dict[str, Any],  # noqa: ARG002 - Reserved for future context-aware responses
+    ) -> ClarificationResponse:
+        """
+        Generate clarification using rule-based templates.
+
+        This is a placeholder until Claude agent integration is complete.
+
+        Args:
+            intent: Parsed intent
+            clarification_type: Clarification strategy
+            context: Conversation context
+
+        Returns:
+            ClarificationResponse with message and actions
+        """
+        # Strategy 1: ask_for_missing_entity
+        if clarification_type == "ask_for_missing_entity":
+            if intent.intent_type == "single_prediction":
+                return ClarificationResponse(
+                    clarification_type="ask_for_missing_entity",
+                    message="I'd be happy to show you a prediction! Which match are you interested in?",
+                    suggested_actions=[
+                        {
+                            "number": "1",
+                            "label": "Example format",
+                            "example": "Arsenal vs Chelsea",
+                        }
+                    ],
+                    follow_up_context={
+                        "detected_intent": "single_prediction",
+                        "awaiting": "team_names",
+                        "original_query": intent.original_query,
+                    },
+                )
+            elif intent.intent_type == "batch_prediction":
+                league_context = ""
+                if intent.leagues and len(intent.leagues) > 0:
+                    league_context = f"{', '.join(intent.leagues)} "
+
+                return ClarificationResponse(
+                    clarification_type="ask_for_missing_entity",
+                    message=f"Got it, you want {league_context}predictions. How many accumulated odds are you targeting?",
+                    suggested_actions=[
+                        {"number": "1", "label": "20 odds (recommended)", "example": "Give me 20 odds"},
+                        {"number": "2", "label": "30 odds", "example": "Give me 30 odds"},
+                        {"number": "3", "label": "Let SIPAP decide", "example": "Best possible outcome"},
+                    ],
+                    follow_up_context={
+                        "detected_intent": "batch_prediction",
+                        "leagues": intent.leagues,
+                        "awaiting": "target_odds",
+                        "original_query": intent.original_query,
+                    },
+                )
+            elif intent.intent_type == "get_match_results":
+                return ClarificationResponse(
+                    clarification_type="ask_for_missing_entity",
+                    message="I can show you match results! Which competition or team are you interested in?",
+                    suggested_actions=[
+                        {"number": "1", "label": "Specific team", "example": "Arsenal results today"},
+                        {
+                            "number": "2",
+                            "label": "Specific competition",
+                            "example": "Premier League results",
+                        },
+                        {"number": "3", "label": "All live matches", "example": "Show me live matches"},
+                    ],
+                    follow_up_context={
+                        "detected_intent": "get_match_results",
+                        "awaiting": "league_or_team",
+                        "original_query": intent.original_query,
+                    },
+                )
+
+        # Strategy 2: disambiguate_intent
+        elif clarification_type == "disambiguate_intent":
+            # Check what entities we have
+            if intent.home_team or intent.away_team:
+                team_name = intent.home_team or intent.away_team or "this team"
+                return ClarificationResponse(
+                    clarification_type="disambiguate_intent",
+                    message=f"I see you're asking about {team_name} matches. What would you like?",
+                    suggested_actions=[
+                        {
+                            "number": "1",
+                            "label": "🎯 Prediction for best outcome",
+                            "example": f"{team_name} prediction",
+                        },
+                        {"number": "2", "label": "📊 Recent match results", "example": f"{team_name} results"},
+                        {"number": "3", "label": "📅 Upcoming fixtures", "example": f"{team_name} schedule"},
+                    ],
+                    follow_up_context={
+                        "detected_team": team_name,
+                        "awaiting": "intent_disambiguation",
+                        "original_query": intent.original_query,
+                    },
+                )
+            elif intent.leagues and len(intent.leagues) > 0:
+                league_name = intent.leagues[0]
+                return ClarificationResponse(
+                    clarification_type="disambiguate_intent",
+                    message=f"I can help with {league_name}! What are you looking for?",
+                    suggested_actions=[
+                        {
+                            "number": "1",
+                            "label": "🎯 Best predictions (accumulated odds)",
+                            "example": f"20 odds from {league_name}",
+                        },
+                        {
+                            "number": "2",
+                            "label": "📊 Recent results/scores",
+                            "example": f"{league_name} results today",
+                        },
+                        {
+                            "number": "3",
+                            "label": "📅 Upcoming matches",
+                            "example": f"{league_name} fixtures",
+                        },
+                    ],
+                    follow_up_context={
+                        "detected_league": league_name,
+                        "awaiting": "intent_disambiguation",
+                        "original_query": intent.original_query,
+                    },
+                )
+
+        # Strategy 3: guide_to_feature
+        elif clarification_type == "guide_to_feature":
+            # Check if it's a greeting
+            if any(
+                greeting in intent.original_query.lower() for greeting in ["hi", "hello", "hey", "good morning"]
+            ):
+                return ClarificationResponse(
+                    clarification_type="guide_to_feature",
+                    message="Hey! 👋 I'm SIPAP. I help you find smart betting opportunities. Try:",
+                    suggested_actions=[
+                        {"number": "1", "label": "Get predictions", "example": "Give me 20 odds"},
+                        {"number": "2", "label": "Check results", "example": "Arsenal results today"},
+                        {"number": "3", "label": "See fixtures", "example": "What matches are available?"},
+                    ],
+                    follow_up_context=None,
+                )
+            else:
+                return ClarificationResponse(
+                    clarification_type="guide_to_feature",
+                    message="I'm here to help! Here's what I can do for you:",
+                    suggested_actions=[
+                        {
+                            "number": "1",
+                            "label": "🎯 Get predictions (accumulated odds)",
+                            "example": "Give me 20 odds with highest success",
+                        },
+                        {
+                            "number": "2",
+                            "label": "📊 Check match results/scores",
+                            "example": "Show me Arsenal results today",
+                        },
+                        {
+                            "number": "3",
+                            "label": "📅 View upcoming fixtures",
+                            "example": "What matches are available?",
+                        },
+                    ],
+                    follow_up_context=None,
+                )
+
+        # Strategy 4: refine_request
+        elif clarification_type == "refine_request":
+            if intent.target_odds and intent.target_odds > 80:
+                return ClarificationResponse(
+                    clarification_type="refine_request",
+                    message=f"{intent.target_odds:.0f} odds is quite ambitious! For better quality predictions, I recommend:",
+                    suggested_actions=[
+                        {
+                            "number": "1",
+                            "label": "20-30 odds (highest quality)",
+                            "example": "Give me 20 odds",
+                        },
+                        {"number": "2", "label": "30-50 odds (high quality)", "example": "Give me 40 odds"},
+                        {
+                            "number": "3",
+                            "label": f"Keep {intent.target_odds:.0f} odds (lower quality)",
+                            "example": f"Proceed with {intent.target_odds:.0f} odds",
+                        },
+                    ],
+                    follow_up_context={
+                        "original_target_odds": intent.target_odds,
+                        "awaiting": "refined_target_odds",
+                        "original_query": intent.original_query,
+                    },
+                )
+
+        # Default fallback
+        return ClarificationResponse(
+            clarification_type="guide_to_feature",
+            message="I didn't quite understand that. I can help you with:",
+            suggested_actions=[
+                {"number": "1", "label": "Get predictions", "example": "Give me 20 odds"},
+                {"number": "2", "label": "Check results", "example": "Arsenal results"},
+                {"number": "3", "label": "See fixtures", "example": "What matches are available?"},
+            ],
+            follow_up_context=None,
         )

@@ -22,6 +22,7 @@ output:
         - batch_prediction
         - single_prediction
         - track_results
+        - get_match_results
         - explain
         - show_fixtures
         - check_odds
@@ -167,7 +168,7 @@ prompt: |
   - "BTTS for Arsenal vs Chelsea" → {intent: single_prediction, home_team: "Arsenal", away_team: "Chelsea", markets: ["BTTS"]}
 
   ### 3. track_results
-  User asks for results of previous predictions.
+  User asks for results of previous predictions (OUR predictions, not actual match scores).
 
   **Indicators:**
   - "updates", "results", "how did", "what happened"
@@ -179,7 +180,33 @@ prompt: |
   - "What do you think happened with the wrong predictions?" → {intent: track_results}
   - "How did your picks do yesterday?" → {intent: track_results}
 
-  ### 4. explain
+  ### 4. get_match_results
+  User wants actual match results/scores for completed or live matches (NOT our predictions).
+
+  **Indicators:**
+  - "results", "scores", "final score", "what's the score"
+  - "how did [team/competition] do", "who won", "what happened in"
+  - "live matches", "current matches", "happening now"
+  - References to competitions/tournaments: "Africa Cup", "World Cup", "Premier League results"
+  - References to past events: "yesterday", "last weekend", "today"
+  - NO prediction request terms ("best", "sure odds", "positive outcome", "picks")
+
+  **Extract:**
+  - competition: Extract competition/tournament name (map to league_name)
+  - leagues: Extract league names
+  - home_team, away_team: Extract team names if specific match
+  - date_range: Extract time period (yesterday, last week, today)
+  - status: Determine if user wants live ("LIVE") or finished ("FT") matches
+
+  **Examples:**
+  - "What's the current results of Women Africa Cup of Nations" → {intent: get_match_results, leagues: ["Women Africa Cup of Nations"], status: "ALL"}
+  - "How did Arsenal do yesterday?" → {intent: get_match_results, home_team: "Arsenal", date_range: YESTERDAY, status: "FT"}
+  - "Show me Premier League results from last weekend" → {intent: get_match_results, leagues: ["Premier League"], date_range: LAST_WEEKEND, status: "FT"}
+  - "What was the score for Man United vs Liverpool?" → {intent: get_match_results, home_team: "Man United", away_team: "Liverpool", status: "FT"}
+  - "Show me live matches" → {intent: get_match_results, status: "LIVE"}
+  - "What's happening in the Champions League right now?" → {intent: get_match_results, leagues: ["Champions League"], status: "LIVE"}
+
+  ### 5. explain
   User wants explanation of a prediction.
 
   **Indicators:**
@@ -190,13 +217,14 @@ prompt: |
   - "Why did you pick Arsenal?" → {intent: explain}
   - "Explain your reasoning for this prediction" → {intent: explain}
 
-  ### 5. show_fixtures
-  User wants to see available fixtures (not predictions).
+  ### 6. show_fixtures
+  User wants to see available fixtures (not predictions, not results).
 
   **Indicators:**
   - "fixtures available", "what matches are on", "when does [team] play"
   - "schedule", "upcoming matches"
   - NO quality terms (sure, best, high success)
+  - NO results terms (score, results, who won)
 
   **Examples:**
   - "What are the fixtures available today?" → {intent: show_fixtures, date_range: {start: TODAY, end: TODAY}}
