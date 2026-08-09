@@ -761,7 +761,7 @@ class MainOrchestrator:
 
         try:
             # Get Intelligence MCP client
-            intelligence_mcp = self.mcp_factory.get_client("intelligence")
+            intelligence_mcp = self.mcp_factory.create("intelligence")
 
             # Prepare parameters for get_match_results tool
             params: dict[str, Any] = {}
@@ -878,7 +878,7 @@ class MainOrchestrator:
 
         try:
             # Get Data MCP client
-            data_mcp = self.mcp_factory.get_client("data")
+            data_mcp = self.mcp_factory.create("data")
 
             # Prepare parameters for search_fixtures tool
             params: dict[str, Any] = {}
