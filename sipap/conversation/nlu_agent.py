@@ -9,6 +9,8 @@ that can handle complex, unstructured natural language queries.
 Pattern adapted from Sentinel's routing agent architecture.
 """
 
+from __future__ import annotations
+
 import logging
 import re
 from datetime import UTC, datetime, timedelta
