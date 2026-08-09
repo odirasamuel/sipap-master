@@ -36,6 +36,8 @@ mcp_servers:
       - get_recent_form
       - get_season_stats
       - search_fixtures
+      - get_injuries
+      - get_lineups
 
   # Intelligence Layer MCP - News and weather intelligence
   intelligence:
@@ -55,7 +57,6 @@ mcp_servers:
       - assess_weather_impact
       - get_historical_weather_performance
       - analyze_team_news
-      - get_injury_reports
 
 # Tool-to-MCP mapping
 # Maps tool names to MCP servers for automatic routing
@@ -70,13 +71,14 @@ tool_routing:
   get_recent_form: data
   get_season_stats: data
   search_fixtures: data
+  get_injuries: data
+  get_lineups: data
 
   # Intelligence MCP tools
   get_match_weather: intelligence
   assess_weather_impact: intelligence
   get_historical_weather_performance: intelligence
   analyze_team_news: intelligence
-  get_injury_reports: intelligence
 
 # Circuit breaker configuration
 circuit_breaker:

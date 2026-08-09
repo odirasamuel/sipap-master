@@ -15,25 +15,25 @@ from collections import Counter
 from datetime import datetime
 from typing import Any
 
+from sipap_common.database.manager import DatabaseManager
+from sipap_common.exceptions import DatabaseError, MCPError
+from sipap_common.utils.retry import retry_with_backoff
 from sqlalchemy import text
 
 from sipap.factory.agent import AgentToolFactory
 from sipap.factory.mcp import MCPFactory
-from sipap_common.database.manager import DatabaseManager
-from sipap_common.exceptions import AgentError, DatabaseError, MCPError, PredictionError
-from sipap_common.utils.retry import retry_with_backoff
 
 
 class SoccerOrchestrator:
     """
-    Coordinates 5 specialized agents to generate ensemble predictions.
+    Coordinates 3 specialized agents to generate ensemble predictions.
 
-    Agents:
-    1. Statistical Agent - Poisson, xG, Elo
-    2. ML Agent - XGBoost model
-    3. Form Agent - Recent form analysis
-    4. Market Agent - Betting market sentiment
-    5. News Agent - Contextual news analysis
+    Agents (MVP - v2.3):
+    1. Statistical Agent (40%) - Long-term statistical analysis (Poisson, xG, Elo)
+    2. Form Agent (40%) - Recent performance patterns and trends
+    3. News Agent (20%) - Current reality adjustments (injuries, suspensions, team news)
+
+    Note: ML Agent and Market Agent removed from MVP for simplicity.
 
     This is a simplified implementation focusing on ensemble logic and quality gates.
     """
@@ -298,10 +298,11 @@ class SoccerOrchestrator:
                 data_mcp.call_tool("get_form_data", {"team_id": home_team_id, "num_matches": 5}),
                 data_mcp.call_tool("get_form_data", {"team_id": away_team_id, "num_matches": 5}),
                 data_mcp.call_tool("get_match_odds", {"match_id": match_id}),
-                # Intelligence data (using correct parameters)
+                # Intelligence data
                 intelligence_mcp.call_tool("get_match_weather", {"match_id": match_id}),
-                intelligence_mcp.call_tool("get_injury_reports", {"team_id": home_team_id, "team_name": home_team_name}),
-                intelligence_mcp.call_tool("get_injury_reports", {"team_id": away_team_id, "team_name": away_team_name}),
+                # Injuries and lineups (from data MCP - both teams in single call)
+                data_mcp.call_tool("get_injuries", {"fixture_id": int(match_id)}),
+                data_mcp.call_tool("get_lineups", {"fixture_id": int(match_id)}),
                 return_exceptions=True,
             )
 
@@ -314,8 +315,8 @@ class SoccerOrchestrator:
                 away_form,
                 odds,
                 weather,
-                home_injuries,
-                away_injuries,
+                injuries,  # Single call returns injuries for both teams
+                lineups,   # Single call returns lineups for both teams
             ) = results
 
             # Build aggregated context
@@ -327,18 +328,19 @@ class SoccerOrchestrator:
                     "name": home_team_name,
                     "stats": home_stats if not isinstance(home_stats, Exception) else None,
                     "form": home_form if not isinstance(home_form, Exception) else None,
-                    "injuries": home_injuries if not isinstance(home_injuries, Exception) else None,
                 },
                 "away_team": {
                     "id": away_team_id,
                     "name": away_team_name,
                     "stats": away_stats if not isinstance(away_stats, Exception) else None,
                     "form": away_form if not isinstance(away_form, Exception) else None,
-                    "injuries": away_injuries if not isinstance(away_injuries, Exception) else None,
                 },
                 "head_to_head": head_to_head if not isinstance(head_to_head, Exception) else None,
                 "odds": odds if not isinstance(odds, Exception) else None,
                 "weather": weather if not isinstance(weather, Exception) else None,
+                # Injuries and lineups at top level (cover both teams)
+                "injuries": injuries if not isinstance(injuries, Exception) else None,
+                "lineups": lineups if not isinstance(lineups, Exception) else None,
             }
 
             self.logger.info(
@@ -381,14 +383,14 @@ class SoccerOrchestrator:
         mcp_intelligence_tools = await self.mcp_factory.get_tools_for_agent("intelligence")
 
         # Load Python function tools
-        from sipap.tools.function import statistical, ml
+        from sipap.tools.function import statistical, web
 
         function_tools = [
             statistical.poisson_model,
             statistical.xg_calculator,
             statistical.elo_rating,
             statistical.form_score,
-            ml.ml_predict,
+            web.web_fetch,  # For News Agent to fetch news content
         ]
 
         # Cache tools
@@ -441,16 +443,15 @@ class SoccerOrchestrator:
         # Step 1: Load all tools
         tools = await self.load_agent_tools()
         data_tools = tools["mcp_data_tools"]
-        intel_tools = tools["mcp_intelligence_tools"]
+        tools["mcp_intelligence_tools"]
         func_tools = tools["function_tools"]
 
         # Step 2: Define agent-specific tool combinations
         agent_tools = {
-            "statistical": data_tools + func_tools,  # Data + statistical functions
-            "ml": data_tools + intel_tools + func_tools,  # All tools
+            "statistical": data_tools + func_tools[:4],  # Data + statistical functions (poisson, xg, elo, form_score)
             "form": data_tools + [func_tools[3]],  # Data + form_score
             "market": data_tools,  # Data only (odds)
-            "news": intel_tools,  # Intelligence only (news, injuries, weather)
+            "news": data_tools + [func_tools[4]],  # Data + web_fetch for news fetching
         }
 
         # Step 3: Create prediction prompt
@@ -476,10 +477,10 @@ Generate a prediction for this soccer match.
 Focus on your specialized analysis approach based on your role.
 """
 
-        # Step 4: Create agents
+        # Step 4: Create agents (3-agent ensemble: Statistical, Form, News)
         self.logger.debug("Creating agents...")
         agents: dict[str, Any] = {}
-        for agent_name in ["statistical", "ml", "form", "market", "news"]:
+        for agent_name in ["statistical", "form", "news"]:
             try:
                 agent = self.agent_factory.create(agent_name, tools=agent_tools[agent_name])
                 agents[agent_name] = agent
@@ -613,8 +614,8 @@ Focus on your specialized analysis approach based on your role.
         optional_fields = [
             ("home_form", context.get("home_team", {}).get("form")),
             ("away_form", context.get("away_team", {}).get("form")),
-            ("home_injuries", context.get("home_team", {}).get("injuries")),
-            ("away_injuries", context.get("away_team", {}).get("injuries")),
+            ("injuries", context.get("injuries")),
+            ("lineups", context.get("lineups")),
             ("head_to_head", context.get("head_to_head")),
             ("weather", context.get("weather")),
         ]
@@ -967,13 +968,11 @@ Focus on your specialized analysis approach based on your role.
         Returns:
             Ensemble prediction dictionary
         """
-        # Weighted average (weights based on historical accuracy)
+        # Weighted average (3-agent ensemble - ML removed from MVP)
         weights = {
-            "statistical": 0.30,  # Increased: Primary data-driven analysis
-            "form": 0.30,         # Increased: Recent performance patterns
-            "ml": 0.20,           # Adjusted: Machine learning patterns
-            "market": 0.10,       # Adjusted: Bookmaker odds analysis
-            "news": 0.10          # Contextual factors (injuries, team news)
+            "statistical": 0.40,  # Primary: Long-term statistical analysis (6 seasons)
+            "form": 0.40,         # Primary: Recent performance patterns (10-15 matches)
+            "news": 0.20,         # Contextual: Current reality adjustments (injuries, suspensions)
         }
 
         # Extract probabilities and calculate weighted average
@@ -1069,7 +1068,7 @@ Focus on your specialized analysis approach based on your role.
         Quality Gates:
         1. Minimum confidence threshold (55%)
         2. Minimum probability threshold (50%)
-        3. Minimum agent consensus (3/5 agents agree)
+        3. Minimum agent consensus (2/3 agents agree)
 
         Args:
             ensemble: Ensemble prediction
@@ -1096,14 +1095,14 @@ Focus on your specialized analysis approach based on your role.
                 "recommendation": "Do not place bet"
             }
 
-        # Quality Gate 3: Agent consensus (at least 3/5 agree)
+        # Quality Gate 3: Agent consensus (at least 2/3 agree)
         outcome_counts = Counter([p["prediction"]["outcome"] for p in agent_predictions])
         max_count = max(outcome_counts.values())
-        if max_count < 3:
+        if max_count < 2:
             return {
                 **ensemble,
                 "quality_gate": "FAILED",
-                "reason": "Insufficient agent consensus (< 3/5)",
+                "reason": "Insufficient agent consensus (< 2/3)",
                 "recommendation": "Do not place bet"
             }
 
