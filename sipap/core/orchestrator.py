@@ -417,16 +417,8 @@ class MainOrchestrator:
             }
 
         elif intent.intent_type == "show_fixtures":
-            # Just list fixtures (no predictions)
-            result = {
-                "message": (
-                    "Fixture listings are coming soon! "
-                    "You'll be able to see all available matches."
-                ),
-                "intent": "show_fixtures",
-                "data": None,
-                "error": None,
-            }
+            # List upcoming fixtures (no predictions)
+            result = await self._handle_show_fixtures(intent, user_id)
 
         elif intent.intent_type == "check_odds":
             # Check odds feature (future)
@@ -860,6 +852,181 @@ class MainOrchestrator:
             return {
                 "message": f"❌ Error fetching match results: {str(e)}",
                 "intent": "get_match_results",
+                "data": None,
+                "error": str(e),
+            }
+
+    async def _handle_show_fixtures(
+        self,
+        intent: RequestIntent,
+        user_id: str,
+    ) -> dict[str, Any]:
+        """
+        Handle show fixtures request (list upcoming matches).
+
+        Calls Data MCP's search_fixtures tool to fetch scheduled matches
+        matching the user's filters (date, league, country).
+
+        Args:
+            intent: Parsed user intent with filters (date_range, leagues, extracted_entities)
+            user_id: User identifier
+
+        Returns:
+            Response dictionary with fixture listings
+        """
+        from datetime import UTC, datetime, timedelta
+
+        try:
+            # Get Data MCP client
+            data_mcp = self.mcp_factory.get_client("data")
+
+            # Prepare parameters for search_fixtures tool
+            params: dict[str, Any] = {}
+
+            # Extract date range (default to next 7 days)
+            if intent.date_range:
+                params["date_from"] = intent.date_range.get("start")
+                params["date_to"] = intent.date_range.get("end", intent.date_range.get("start"))
+            else:
+                # Default to next 7 days
+                today = datetime.now(UTC).date()
+                params["date_from"] = today.isoformat()
+                params["date_to"] = (today + timedelta(days=7)).isoformat()
+
+            # Extract league/country filters
+            league_names = []
+
+            # Check for explicit league names in intent
+            if intent.leagues:
+                league_names.extend(intent.leagues)
+
+            # Check for country/location in extracted entities or original query
+            entities = intent.extracted_entities or {}
+
+            # Map country names to league names
+            country_to_leagues = {
+                "sweden": ["Allsvenskan", "Superettan"],
+                "england": ["Premier League", "Championship", "League One", "League Two"],
+                "spain": ["LaLiga", "LaLiga2"],
+                "germany": ["Bundesliga", "2. Bundesliga"],
+                "italy": ["Serie A", "Serie B"],
+                "france": ["Ligue 1", "Ligue 2"],
+            }
+
+            # Check if country mentioned in original query
+            original_query_lower = intent.original_query.lower()
+            for country, leagues in country_to_leagues.items():
+                if country in original_query_lower:
+                    league_names.extend(leagues)
+                    break
+
+            if league_names:
+                params["league_names"] = league_names
+
+            # Only show scheduled matches with odds available
+            params["status"] = "scheduled"
+            params["has_odds"] = True
+            params["limit"] = 50  # Limit to 50 fixtures
+
+            # Call Data MCP tool
+            result = await data_mcp.call_tool("search_fixtures", params)
+
+            # Extract fixtures from result
+            fixtures = result.get("fixtures", [])
+            count = result.get("count", 0)
+            filters_applied = result.get("filters_applied", {})
+
+            # Format results for user
+            if count == 0:
+                # Build helpful message based on what filters were applied
+                filter_desc = []
+                if params.get("league_names"):
+                    filter_desc.append(f"leagues: {', '.join(params['league_names'])}")
+                if params.get("date_from"):
+                    filter_desc.append(f"date: {params['date_from']}")
+
+                filter_text = " with " + " and ".join(filter_desc) if filter_desc else ""
+
+                message = (
+                    f"No fixtures found{filter_text}.\n\n"
+                    f"Try:\n"
+                    f"- Different date range\n"
+                    f"- Different leagues/countries\n"
+                    f"- Checking available competitions"
+                )
+                return {
+                    "message": message,
+                    "intent": "show_fixtures",
+                    "data": result,
+                    "error": None,
+                }
+
+            # Format fixture listings for WhatsApp
+            lines = [f"📅 Upcoming Fixtures ({count} matches):\n"]
+
+            # Group fixtures by date
+            from collections import defaultdict
+            fixtures_by_date = defaultdict(list)
+
+            for fixture in fixtures[:20]:  # Limit to 20 fixtures for WhatsApp
+                scheduled_at = fixture.get("scheduled_at", "")
+                if scheduled_at:
+                    # Extract just the date part (YYYY-MM-DD)
+                    date_part = scheduled_at.split("T")[0] if "T" in scheduled_at else scheduled_at[:10]
+                    fixtures_by_date[date_part].append(fixture)
+
+            # Format each date group
+            for date_str, date_fixtures in sorted(fixtures_by_date.items())[:5]:  # Max 5 days
+                # Parse date for display
+                try:
+                    date_obj = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                    date_display = date_obj.strftime("%a, %b %d")
+                except:
+                    date_display = date_str
+
+                lines.append(f"\n📆 {date_display}:")
+
+                for fixture in date_fixtures[:8]:  # Max 8 matches per day
+                    home_team = fixture.get("home_team", "Unknown")
+                    away_team = fixture.get("away_team", "Unknown")
+                    league = fixture.get("league", "")
+                    time_part = fixture.get("scheduled_at", "").split("T")[1][:5] if "T" in fixture.get("scheduled_at", "") else ""
+
+                    # Format: "⚽ 15:00 Arsenal vs Chelsea [Premier League]"
+                    if time_part:
+                        lines.append(f"  ⚽ {time_part} {home_team} vs {away_team}")
+                    else:
+                        lines.append(f"  ⚽ {home_team} vs {away_team}")
+
+                    if league:
+                        lines.append(f"     📍 {league}")
+
+            if count > 20:
+                lines.append(f"\n... and {count - 20} more fixtures")
+
+            # Add filter information
+            if filters_applied:
+                lines.append("\n")
+                if filters_applied.get("leagues"):
+                    lines.append(f"🔍 Filtered by: {', '.join(filters_applied['leagues'])}")
+                if filters_applied.get("date_range"):
+                    date_range = filters_applied["date_range"]
+                    lines.append(f"📅 Date range: {date_range.get('from')} to {date_range.get('to')}")
+
+            message = "\n".join(lines)
+
+            return {
+                "message": message,
+                "intent": "show_fixtures",
+                "data": result,
+                "error": None,
+            }
+
+        except Exception as e:
+            self.logger.error(f"Show fixtures failed: {e}", exc_info=True)
+            return {
+                "message": f"❌ Error fetching fixtures: {str(e)}",
+                "intent": "show_fixtures",
                 "data": None,
                 "error": str(e),
             }
