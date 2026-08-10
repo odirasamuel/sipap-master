@@ -216,10 +216,15 @@ class BatchOrchestrator:
                 break
 
             # Skip fixtures without odds data
-            fixture_odds = fixture.get("odds")
-            if not fixture_odds or not any(fixture_odds.values() if isinstance(fixture_odds, dict) else []):
-                self.logger.debug(
-                    f"Skipping fixture {fixture.get('id')} - no odds data available"
+            # Odds come as separate columns: best_home_odds, best_draw_odds, best_away_odds
+            has_odds = (
+                fixture.get("best_home_odds") is not None
+                or fixture.get("best_draw_odds") is not None
+                or fixture.get("best_away_odds") is not None
+            )
+            if not has_odds:
+                self.logger.info(
+                    f"Skipping fixture {fixture.get('id')} ({fixture.get('home_team')} vs {fixture.get('away_team')}) - no odds data available"
                 )
                 continue
 
