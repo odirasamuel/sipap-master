@@ -26,6 +26,11 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 
+# Reduce verbosity of third-party loggers
+logging.getLogger("httpx").setLevel(logging.WARNING)  # Silence HTTP request logs
+logging.getLogger("httpcore").setLevel(logging.WARNING)  # Silence HTTP core logs
+logging.getLogger("asyncpg").setLevel(logging.WARNING)  # Silence database logs
+
 logger = logging.getLogger(__name__)
 
 
