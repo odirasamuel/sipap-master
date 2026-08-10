@@ -876,6 +876,11 @@ class MainOrchestrator:
         """
         from datetime import UTC, datetime, timedelta
 
+        self.logger.info(
+            f"Handling show_fixtures request for user {user_id}",
+            extra={"user_id": user_id, "intent": intent.intent}
+        )
+
         try:
             # Get Data MCP client
             data_mcp = self.mcp_factory.create("data")
@@ -887,11 +892,13 @@ class MainOrchestrator:
             if intent.date_range:
                 params["date_from"] = intent.date_range.get("start")
                 params["date_to"] = intent.date_range.get("end", intent.date_range.get("start"))
+                self.logger.debug(f"Using date range from intent: {params['date_from']} to {params['date_to']}")
             else:
                 # Default to next 7 days
                 today = datetime.now(UTC).date()
                 params["date_from"] = today.isoformat()
                 params["date_to"] = (today + timedelta(days=7)).isoformat()
+                self.logger.debug(f"Using default date range: {params['date_from']} to {params['date_to']}")
 
             # Extract league/country filters
             league_names = []
@@ -915,18 +922,29 @@ class MainOrchestrator:
 
             # Check if country mentioned in original query
             original_query_lower = intent.original_query.lower()
+            matched_country = None
             for country, leagues in country_to_leagues.items():
                 if country in original_query_lower:
                     league_names.extend(leagues)
+                    matched_country = country
+                    self.logger.debug(f"Matched country '{country}' → leagues: {leagues}")
                     break
 
             if league_names:
                 params["league_names"] = league_names
+                self.logger.info(f"Filtering by leagues: {league_names}")
+            else:
+                self.logger.debug("No league filter applied, querying all leagues")
 
             # Show upcoming matches (API-Football uses 'NS' for Not Started, not 'scheduled')
             params["status"] = "NS"  # Match API-Football status codes
             params["has_odds"] = False  # Don't filter by odds - show all fixtures
             params["limit"] = 50  # Limit to 50 fixtures
+
+            self.logger.info(
+                "Calling Data MCP search_fixtures",
+                extra={"params": params}
+            )
 
             # Call Data MCP tool
             result = await data_mcp.call_tool("search_fixtures", params)
@@ -935,6 +953,11 @@ class MainOrchestrator:
             fixtures = result.get("fixtures", [])
             count = result.get("count", 0)
             filters_applied = result.get("filters_applied", {})
+
+            self.logger.info(
+                f"Data MCP returned {count} fixtures",
+                extra={"count": count, "filters": filters_applied}
+            )
 
             # Format results for user
             if count == 0:

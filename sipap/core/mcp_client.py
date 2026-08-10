@@ -296,6 +296,11 @@ class MCPClient:
             import json as json_lib
             result = mcp_response.result
 
+            self.logger.debug(
+                f"Raw MCP response result type: {type(result).__name__}",
+                extra={"has_content": "content" in result if isinstance(result, dict) else False}
+            )
+
             if isinstance(result, dict) and "content" in result:
                 content_items = result.get("content", [])
                 if content_items and len(content_items) > 0:
@@ -306,9 +311,13 @@ class MCPClient:
                             # Parse JSON string to dict
                             try:
                                 result = json_lib.loads(text_content)
-                            except json_lib.JSONDecodeError:
+                                self.logger.debug(
+                                    f"Unwrapped MCP response: {len(text_content)} bytes → {type(result).__name__}"
+                                )
+                            except json_lib.JSONDecodeError as e:
                                 self.logger.warning(
-                                    f"Failed to parse MCP tool response as JSON: {text_content[:100]}..."
+                                    f"Failed to parse MCP tool response as JSON: {text_content[:100]}...",
+                                    extra={"error": str(e)}
                                 )
 
             self.logger.debug(
