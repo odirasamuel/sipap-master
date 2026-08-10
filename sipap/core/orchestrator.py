@@ -991,7 +991,7 @@ class MainOrchestrator:
             from collections import defaultdict
             fixtures_by_date = defaultdict(list)
 
-            for fixture in fixtures[:20]:  # Limit to 20 fixtures for WhatsApp
+            for fixture in fixtures[:50]:  # Limit to 50 fixtures for WhatsApp
                 scheduled_at = fixture.get("scheduled_at", "")
                 if scheduled_at:
                     # Extract just the date part (YYYY-MM-DD)
@@ -1009,7 +1009,7 @@ class MainOrchestrator:
 
                 lines.append(f"\n📆 {date_display}:")
 
-                for fixture in date_fixtures[:8]:  # Max 8 matches per day
+                for fixture in date_fixtures[:50]:  # Max 50 matches per day
                     home_team = fixture.get("home_team", "Unknown")
                     away_team = fixture.get("away_team", "Unknown")
                     league = fixture.get("league", "")
@@ -1034,8 +1034,8 @@ class MainOrchestrator:
                     if best_home_odds and best_draw_odds and best_away_odds:
                         lines.append(f"     💰 Odds: {best_home_odds:.2f} / {best_draw_odds:.2f} / {best_away_odds:.2f}")
 
-            if count > 20:
-                lines.append(f"\n... and {count - 20} more fixtures")
+            if count > 50:
+                lines.append(f"\n... and {count - 50} more fixtures")
 
             # Add filter information
             if filters_applied:
