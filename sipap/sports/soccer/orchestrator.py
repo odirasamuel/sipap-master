@@ -306,13 +306,13 @@ class SoccerOrchestrator:
             # Step 2: Fetch all other data in parallel (skip tools that fail or aren't available)
             # Note: All items must be coroutines, not None, for asyncio.gather
             results = await asyncio.gather(
-                # Sports data (use correct parameter names from Data MCP)
-                # Team stats needs both team_id (UUID) and league_id + season
-                data_mcp.call_tool("get_team_stats", {"team_id": home_team_id, "league_id": league_id, "season": season}) if league_id and home_team_id else return_none(),
-                data_mcp.call_tool("get_team_stats", {"team_id": away_team_id, "league_id": league_id, "season": season}) if league_id and away_team_id else return_none(),
-                # Head-to-head needs external team IDs (integers), not UUIDs
-                data_mcp.call_tool("get_head_to_head", {"home_team_id": home_team_external_id, "away_team_id": away_team_external_id}) if home_team_external_id and away_team_external_id else return_none(),
-                # Form data uses team UUIDs
+                # Sports data (all need external integer IDs from API-Football)
+                # Team stats needs external team_id (int), league_id (int), and season (str)
+                data_mcp.call_tool("get_team_stats", {"team_id": int(home_team_external_id), "league_id": int(league_id), "season": season}) if home_team_external_id and league_id else return_none(),
+                data_mcp.call_tool("get_team_stats", {"team_id": int(away_team_external_id), "league_id": int(league_id), "season": season}) if away_team_external_id and league_id else return_none(),
+                # Head-to-head needs external team IDs (integers)
+                data_mcp.call_tool("get_head_to_head", {"home_team_id": int(home_team_external_id), "away_team_id": int(away_team_external_id)}) if home_team_external_id and away_team_external_id else return_none(),
+                # Form data uses team UUIDs (string)
                 data_mcp.call_tool("get_form_data", {"team_id": home_team_id, "num_matches": 5}) if home_team_id else return_none(),
                 data_mcp.call_tool("get_form_data", {"team_id": away_team_id, "num_matches": 5}) if away_team_id else return_none(),
                 # Match odds uses external fixture ID (integer)
