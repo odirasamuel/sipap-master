@@ -281,6 +281,7 @@ class SoccerOrchestrator:
             home_team_id = match_data.get("home_team_id")
             away_team_id = match_data.get("away_team_id")
             external_id = match_data.get("external_id")  # API-Football fixture ID (integer)
+            league_id = match_data.get("league_id")  # API-Football league ID (integer)
 
             # Handle both string and dict formats for team names
             home_team = match_data.get("home_team")
@@ -294,20 +295,20 @@ class SoccerOrchestrator:
                 raise ValueError(f"Match date not found in match details: {match_id}")
             season = self.extract_season_from_date(match_date_str)
 
-            # Step 2: Fetch all other data in parallel
+            # Step 2: Fetch all other data in parallel (skip tools that fail or aren't available)
             results = await asyncio.gather(
-                # Sports data (using correct tool names and parameters)
-                data_mcp.call_tool("get_team_stats", {"team_id": home_team_id, "season": season}),
-                data_mcp.call_tool("get_team_stats", {"team_id": away_team_id, "season": season}),
-                data_mcp.call_tool("get_head_to_head", {"team1_id": home_team_id, "team2_id": away_team_id, "limit": 10}),
+                # Sports data (use correct parameter names from Data MCP)
+                data_mcp.call_tool("get_team_stats", {"team_id": home_team_id, "league_id": league_id, "season": season}) if league_id else None,
+                data_mcp.call_tool("get_team_stats", {"team_id": away_team_id, "league_id": league_id, "season": season}) if league_id else None,
+                data_mcp.call_tool("get_head_to_head", {"home_team_id": home_team_id, "away_team_id": away_team_id}),
                 data_mcp.call_tool("get_form_data", {"team_id": home_team_id, "num_matches": 5}),
                 data_mcp.call_tool("get_form_data", {"team_id": away_team_id, "num_matches": 5}),
-                data_mcp.call_tool("get_match_odds", {"match_id": match_id}),
-                # Intelligence data
-                intelligence_mcp.call_tool("get_match_weather", {"match_id": match_id}),
-                # Injuries and lineups (from data MCP - use external_id not internal UUID)
-                data_mcp.call_tool("get_injuries", {"fixture_id": int(external_id)}) if external_id else None,
-                data_mcp.call_tool("get_lineups", {"fixture_id": int(external_id)}) if external_id else None,
+                data_mcp.call_tool("get_match_odds", {"fixture_id": int(external_id)}) if external_id else None,
+                # Intelligence data (skip weather for now due to RedisCache error)
+                None,  # intelligence_mcp.call_tool("get_match_weather", {"match_id": match_id}),
+                # Injuries and lineups (skip - tools not registered in MCP yet)
+                None,  # data_mcp.call_tool("get_injuries", {"fixture_id": int(external_id)}) if external_id else None,
+                None,  # data_mcp.call_tool("get_lineups", {"fixture_id": int(external_id)}) if external_id else None,
                 return_exceptions=True,
             )
 
