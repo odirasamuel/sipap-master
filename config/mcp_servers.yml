@@ -22,7 +22,7 @@ mcp_servers:
       dev: "${DATA_MCP_URL}"
       staging: "${DATA_MCP_URL}"
       prod: "${DATA_MCP_URL}"
-    timeout: 5.0
+    timeout: 120.0  # Increased from 5.0 - data queries can take longer due to cold start/VPC
     retry:
       max_attempts: 3
       backoff_factor: 0.5
