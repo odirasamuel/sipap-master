@@ -191,6 +191,11 @@ class MainOrchestrator:
 
         # Calculate ensemble from agent predictions
         ensemble = orchestrator._calculate_ensemble(agent_predictions, market)
+        self.logger.info(
+            f"Ensemble result: {ensemble.get('outcome', 'Unknown')} "
+            f"(prob: {ensemble.get('probability', 0):.2f}, "
+            f"conf: {ensemble.get('confidence', 0):.0f}%)"
+        )
 
         # Step 4: Calculate expected value
         self.logger.debug("Step 4: Calculating expected value")

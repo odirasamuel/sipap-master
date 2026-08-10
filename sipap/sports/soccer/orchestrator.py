@@ -516,13 +516,13 @@ Focus on your specialized analysis approach based on your role.
             raise RuntimeError("Failed to create any agents")
 
         # Step 5: Execute all agents in parallel
-        self.logger.debug(f"Executing {len(agents)} agents in parallel...")
+        self.logger.info(f"Executing {len(agents)} agents in parallel for market: {market}")
 
         async def run_agent(name: str, agent: Any) -> tuple[str, Any]:
             """Execute single agent and return (name, result)."""
             try:
                 result = await agent(prompt)
-                self.logger.debug(f"Agent {name} completed successfully")
+                self.logger.info(f"Agent {name} completed successfully")
                 return (name, result)
             except Exception as e:
                 self.logger.error(
@@ -561,6 +561,11 @@ Focus on your specialized analysis approach based on your role.
                         "evidence": structured.evidence,
                         "metadata": structured.metadata if hasattr(structured, "metadata") else {},
                     }
+                    self.logger.info(
+                        f"Agent {agent_name} prediction: {prediction_data['prediction']['outcome']} "
+                        f"(prob: {prediction_data['prediction']['probability']:.2f}, "
+                        f"conf: {prediction_data['prediction']['confidence']})"
+                    )
                 else:
                     # Fallback: try to parse from result object
                     self.logger.warning(
