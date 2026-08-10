@@ -205,7 +205,7 @@ class SoccerOrchestrator:
             pass
 
         # Not a UUID - treat as natural language search query
-        self.logger.info(f"Resolving natural language match identifier: {match_identifier}")
+        self.logger.debug(f"Resolving natural language match identifier: {match_identifier}")
 
         try:
             # Use MCP data server to search for matches
@@ -260,7 +260,7 @@ class SoccerOrchestrator:
         Raises:
             Exception: If critical data cannot be fetched
         """
-        self.logger.info(f"Aggregating context for match {match_id}")
+        self.logger.debug(f"Aggregating context for match {match_id}")
 
         # Create MCP clients
         data_mcp = self.mcp_factory.create("data")
@@ -380,7 +380,7 @@ class SoccerOrchestrator:
             self.logger.debug("Using cached tools")
             return self._tools_cache
 
-        self.logger.info("Loading agent tools...")
+        self.logger.debug("Loading agent tools...")
 
         # Load MCP tools from both servers
         mcp_data_tools = await self.mcp_factory.get_tools_for_agent("data")
@@ -442,7 +442,7 @@ class SoccerOrchestrator:
             >>> predictions = await orchestrator.run_agent_predictions(context, "1X2")
             >>> assert len(predictions) == 5  # 5 agents
         """
-        self.logger.info(f"Running agent predictions for market: {market}")
+        self.logger.debug(f"Running agent predictions for market: {market}")
 
         # Step 1: Load all tools
         tools = await self.load_agent_tools()
@@ -501,7 +501,7 @@ Focus on your specialized analysis approach based on your role.
             raise RuntimeError("Failed to create any agents")
 
         # Step 5: Execute all agents in parallel
-        self.logger.info(f"Executing {len(agents)} agents in parallel...")
+        self.logger.debug(f"Executing {len(agents)} agents in parallel...")
 
         async def run_agent(name: str, agent: Any) -> tuple[str, Any]:
             """Execute single agent and return (name, result)."""
@@ -692,7 +692,7 @@ Focus on your specialized analysis approach based on your role.
         Raises:
             DatabaseError: If save operation fails
         """
-        self.logger.info(f"Saving prediction for match {match_id}")
+        self.logger.debug(f"Saving prediction for match {match_id}")
 
         # Generate prediction ID
         prediction_id = uuid.uuid4()

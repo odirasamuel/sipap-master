@@ -683,14 +683,14 @@ class BatchOrchestrator:
 
             except (RetryExhausted, PermanentError) as e:
                 # Retry exhausted or permanent error - log and skip this market
-                self.logger.warning(
+                self.logger.debug(
                     f"Prediction failed for market {market.code} on fixture {fixture['id']}: {e}"
                 )
                 failed_markets += 1
                 continue
             except Exception as e:
                 # Unexpected error - log and skip this market
-                self.logger.warning(
+                self.logger.debug(
                     f"Unexpected error for market {market.code} on fixture {fixture['id']}: {e}"
                 )
                 failed_markets += 1

@@ -138,7 +138,7 @@ async def retry_with_backoff(
 
             # Check if error is permanent
             if not is_transient_error(e):
-                logger.error(
+                logger.debug(
                     f"Permanent error encountered on attempt {attempt}/{max_attempts}: {e}"
                 )
                 raise PermanentError(f"Permanent error: {e}") from e
