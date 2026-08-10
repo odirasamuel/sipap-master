@@ -290,12 +290,33 @@ class MCPClient:
             if mcp_response.result is None:
                 raise ValueError("MCP response missing result field")
 
+            # Unwrap MCP tool response from content array
+            # MCP protocol returns: {"content": [{"type": "text", "text": "..."}]}
+            # We need to extract and parse the JSON from content[0].text
+            import json as json_lib
+            result = mcp_response.result
+
+            if isinstance(result, dict) and "content" in result:
+                content_items = result.get("content", [])
+                if content_items and len(content_items) > 0:
+                    first_item = content_items[0]
+                    if isinstance(first_item, dict) and first_item.get("type") == "text":
+                        text_content = first_item.get("text", "")
+                        if text_content:
+                            # Parse JSON string to dict
+                            try:
+                                result = json_lib.loads(text_content)
+                            except json_lib.JSONDecodeError:
+                                self.logger.warning(
+                                    f"Failed to parse MCP tool response as JSON: {text_content[:100]}..."
+                                )
+
             self.logger.debug(
                 f"MCP tool call successful: {self.name}.{tool_name}",
-                extra={"result_keys": list(mcp_response.result.keys())},
+                extra={"result_keys": list(result.keys()) if isinstance(result, dict) else []},
             )
 
-            return mcp_response.result
+            return result
 
         except httpx.HTTPError as e:
             self.logger.error(
