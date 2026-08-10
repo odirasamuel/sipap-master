@@ -280,6 +280,7 @@ class SoccerOrchestrator:
             match_data = match_details_result["match"]
             home_team_id = match_data.get("home_team_id")
             away_team_id = match_data.get("away_team_id")
+            external_id = match_data.get("external_id")  # API-Football fixture ID (integer)
 
             # Handle both string and dict formats for team names
             home_team = match_data.get("home_team")
@@ -304,9 +305,9 @@ class SoccerOrchestrator:
                 data_mcp.call_tool("get_match_odds", {"match_id": match_id}),
                 # Intelligence data
                 intelligence_mcp.call_tool("get_match_weather", {"match_id": match_id}),
-                # Injuries and lineups (from data MCP - both teams in single call)
-                data_mcp.call_tool("get_injuries", {"fixture_id": int(match_id)}),
-                data_mcp.call_tool("get_lineups", {"fixture_id": int(match_id)}),
+                # Injuries and lineups (from data MCP - use external_id not internal UUID)
+                data_mcp.call_tool("get_injuries", {"fixture_id": int(external_id)}) if external_id else None,
+                data_mcp.call_tool("get_lineups", {"fixture_id": int(external_id)}) if external_id else None,
                 return_exceptions=True,
             )
 
