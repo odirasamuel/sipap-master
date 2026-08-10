@@ -923,9 +923,9 @@ class MainOrchestrator:
             if league_names:
                 params["league_names"] = league_names
 
-            # Only show scheduled matches with odds available
+            # Show scheduled matches (odds not required for listings)
             params["status"] = "scheduled"
-            params["has_odds"] = True
+            params["has_odds"] = False  # Don't filter by odds - show all fixtures
             params["limit"] = 50  # Limit to 50 fixtures
 
             # Call Data MCP tool
