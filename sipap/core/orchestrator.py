@@ -923,8 +923,8 @@ class MainOrchestrator:
             if league_names:
                 params["league_names"] = league_names
 
-            # Show scheduled matches (odds not required for listings)
-            params["status"] = "scheduled"
+            # Show upcoming matches (API-Football uses 'NS' for Not Started, not 'scheduled')
+            params["status"] = "NS"  # Match API-Football status codes
             params["has_odds"] = False  # Don't filter by odds - show all fixtures
             params["limit"] = 50  # Limit to 50 fixtures
 
