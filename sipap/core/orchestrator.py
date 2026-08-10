@@ -1031,8 +1031,8 @@ class MainOrchestrator:
                         lines.append(f"     📍 {league}")
 
                     # Show odds if available
-                    if best_home_odds and best_draw_odds and best_away_odds and bookmakers_count > 0:
-                        lines.append(f"     💰 Odds: {best_home_odds:.2f} / {best_draw_odds:.2f} / {best_away_odds:.2f} ({bookmakers_count} bookmakers)")
+                    if best_home_odds and best_draw_odds and best_away_odds:
+                        lines.append(f"     💰 Odds: {best_home_odds:.2f} / {best_draw_odds:.2f} / {best_away_odds:.2f}")
 
             if count > 20:
                 lines.append(f"\n... and {count - 20} more fixtures")
