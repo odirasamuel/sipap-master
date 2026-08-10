@@ -1015,6 +1015,12 @@ class MainOrchestrator:
                     league = fixture.get("league", "")
                     time_part = fixture.get("scheduled_at", "").split("T")[1][:5] if "T" in fixture.get("scheduled_at", "") else ""
 
+                    # Odds data (from Data MCP LEFT JOIN with odds table)
+                    best_home_odds = fixture.get("best_home_odds")
+                    best_draw_odds = fixture.get("best_draw_odds")
+                    best_away_odds = fixture.get("best_away_odds")
+                    bookmakers_count = fixture.get("bookmakers_count", 0)
+
                     # Format: "⚽ 15:00 Arsenal vs Chelsea [Premier League]"
                     if time_part:
                         lines.append(f"  ⚽ {time_part} {home_team} vs {away_team}")
@@ -1023,6 +1029,10 @@ class MainOrchestrator:
 
                     if league:
                         lines.append(f"     📍 {league}")
+
+                    # Show odds if available
+                    if best_home_odds and best_draw_odds and best_away_odds and bookmakers_count > 0:
+                        lines.append(f"     💰 Odds: {best_home_odds:.2f} / {best_draw_odds:.2f} / {best_away_odds:.2f} ({bookmakers_count} bookmakers)")
 
             if count > 20:
                 lines.append(f"\n... and {count - 20} more fixtures")
