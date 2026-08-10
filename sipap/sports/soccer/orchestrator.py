@@ -280,8 +280,12 @@ class SoccerOrchestrator:
             match_data = match_details_result["match"]
             home_team_id = match_data.get("home_team_id")
             away_team_id = match_data.get("away_team_id")
-            home_team_name = match_data.get("home_team", {}).get("name", "Unknown")
-            away_team_name = match_data.get("away_team", {}).get("name", "Unknown")
+
+            # Handle both string and dict formats for team names
+            home_team = match_data.get("home_team")
+            away_team = match_data.get("away_team")
+            home_team_name = home_team if isinstance(home_team, str) else (home_team.get("name", "Unknown") if isinstance(home_team, dict) else "Unknown")
+            away_team_name = away_team if isinstance(away_team, str) else (away_team.get("name", "Unknown") if isinstance(away_team, dict) else "Unknown")
 
             # Extract season from match date dynamically
             match_date_str = match_data.get("scheduled_at") or match_data.get("date")
