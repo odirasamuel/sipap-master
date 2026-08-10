@@ -909,11 +909,13 @@ Focus on your specialized analysis approach based on your role.
 
         # Ensure outcome is a string
         if not isinstance(outcome_raw, str):
+            self.logger.warning(f"Invalid outcome type: {type(outcome_raw)} - {outcome_raw}")
             return {
                 "expected_value": 0.0,
+                "odds": 0.0,
                 "is_positive_ev": False,
                 "recommendation": "SKIP - Invalid outcome type",
-                "reason": "Outcome must be a string",
+                "reason": f"Outcome must be a string, got {type(outcome_raw)}",
             }
 
         outcome: str = outcome_raw
@@ -921,11 +923,15 @@ Focus on your specialized analysis approach based on your role.
         # Get odds for this outcome
         outcome_odds = odds.get(outcome)
         if not outcome_odds:
+            self.logger.warning(
+                f"No odds found for outcome '{outcome}'. Available odds keys: {list(odds.keys())}"
+            )
             return {
                 "expected_value": 0.0,
+                "odds": 0.0,
                 "is_positive_ev": False,
                 "recommendation": "SKIP - No odds available",
-                "reason": f"No odds found for outcome: {outcome}",
+                "reason": f"No odds found for outcome: {outcome}. Available: {list(odds.keys())}",
             }
 
         # Convert decimal odds to implied probability
