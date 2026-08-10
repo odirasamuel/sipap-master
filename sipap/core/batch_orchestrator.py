@@ -215,6 +215,14 @@ class BatchOrchestrator:
             if accumulated_sum >= target:
                 break
 
+            # Skip fixtures without odds data
+            fixture_odds = fixture.get("odds")
+            if not fixture_odds or not any(fixture_odds.values() if isinstance(fixture_odds, dict) else []):
+                self.logger.debug(
+                    f"Skipping fixture {fixture.get('id')} - no odds data available"
+                )
+                continue
+
             # Predict fixture - evaluates ALL markets, picks best EV
             try:
                 analysis = await self._predict_fixture(fixture, user_id)
