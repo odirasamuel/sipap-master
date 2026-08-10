@@ -259,6 +259,179 @@ class MainOrchestrator:
 
         return final_prediction
 
+    async def predict_with_context(
+        self,
+        sport: str,
+        match_id: str,
+        market: str,
+        context: dict[str, Any],
+        user_id: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Generate prediction using pre-aggregated context.
+
+        This is an OPTIMIZED version of predict() for batch processing where
+        context has already been aggregated. It skips context aggregation and
+        validation steps, proceeding directly to agent execution.
+
+        Use this when processing multiple markets for the SAME fixture to avoid
+        redundant MCP calls (context is identical across markets).
+
+        Args:
+            sport: Sport identifier (e.g., "soccer")
+            match_id: Match identifier (must be resolved UUID)
+            market: Betting market (e.g., "1X2", "BTTS", "OU2.5")
+            context: Pre-aggregated context from aggregate_context()
+            user_id: Optional user identifier
+
+        Returns:
+            Final prediction with recommendation
+
+        Raises:
+            ValueError: If sport not supported
+
+        Example:
+            >>> # Batch processing 44 markets for same fixture
+            >>> context = await orchestrator.aggregate_context(match_id)
+            >>> for market in all_markets:
+            ...     prediction = await orchestrator.predict_with_context(
+            ...         sport="soccer",
+            ...         match_id=match_id,
+            ...         market=market,
+            ...         context=context,
+            ...     )
+        """
+        self.logger.info(
+            "Prediction with context request received",
+            extra={"sport": sport, "match_id": match_id, "market": market},
+        )
+
+        # Validate sport
+        if sport not in self._orchestrators:
+            supported = list(self._orchestrators.keys())
+            raise ValueError(
+                f"Sport '{sport}' not supported. Available sports: {supported}"
+            )
+
+        # Get sport-specific orchestrator
+        orchestrator = self._orchestrators[sport]
+
+        # Step 1: Run ensemble prediction with real AI agents
+        self.logger.debug("Step 1: Running AI agent predictions")
+
+        try:
+            # Execute all 5 specialized agents
+            agent_predictions = await orchestrator.run_agent_predictions(context, market)
+        except Exception as e:
+            self.logger.error(
+                f"Agent execution failed: {e}",
+                exc_info=True,
+            )
+            return {
+                "status": "FAILED",
+                "reason": f"Agent execution error: {str(e)}",
+                "recommendation": "SKIP - Agent execution failed",
+            }
+
+        # Calculate ensemble from agent predictions
+        ensemble = orchestrator._calculate_ensemble(agent_predictions, market)
+        self.logger.info(
+            f"Ensemble result: {ensemble.get('outcome', 'Unknown')} "
+            f"(prob: {ensemble.get('probability', 0):.2f}, "
+            f"conf: {ensemble.get('confidence', 0):.0f}%)"
+        )
+
+        # Step 2: Calculate expected value
+        self.logger.debug("Step 2: Calculating expected value")
+        odds = context.get("odds", {})
+        ev_analysis = orchestrator.calculate_expected_value(ensemble, odds)
+
+        # Add EV to ensemble
+        ensemble["expected_value"] = ev_analysis
+
+        # Step 3: Apply quality gates
+        self.logger.debug("Step 3: Applying quality gates")
+        final_prediction: dict[str, Any] = orchestrator._apply_quality_gates(ensemble, agent_predictions)
+
+        # Step 4: Save prediction
+        self.logger.debug("Step 4: Saving prediction to database")
+        save_result = await orchestrator.save_prediction(match_id, final_prediction, context)
+
+        # Add save result to prediction
+        final_prediction["save_result"] = save_result
+
+        self.logger.info(
+            "Prediction with context complete",
+            extra={
+                "match_id": match_id,
+                "market": market,
+                "quality_gate": final_prediction.get("quality_gate"),
+                "recommendation": final_prediction.get("recommendation"),
+                "prediction_id": save_result.get("prediction_id"),
+            },
+        )
+
+        return final_prediction
+
+    async def aggregate_and_validate_context(
+        self,
+        sport: str,
+        match_id: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]] | tuple[None, dict[str, Any]]:
+        """
+        Aggregate and validate context for a fixture.
+
+        Helper method for batch processing to check context quality BEFORE
+        evaluating markets. Returns (context, validation) tuple.
+
+        Args:
+            sport: Sport identifier
+            match_id: Match identifier (can be UUID or natural language)
+
+        Returns:
+            (context, validation) if validation passes
+            (None, validation) if validation fails
+
+        Example:
+            >>> context, validation = await orchestrator.aggregate_and_validate_context(
+            ...     sport="soccer",
+            ...     match_id="123e4567-e89b-12d3-a456-426614174000",
+            ... )
+            >>> if context is None:
+            ...     print(f"Skipping fixture: {validation['reason']}")
+            ...     return
+            >>> # Use context for multiple markets...
+        """
+        # Validate sport
+        if sport not in self._orchestrators:
+            supported = list(self._orchestrators.keys())
+            return (None, {
+                "status": "FAILED",
+                "reason": f"Sport '{sport}' not supported. Available: {supported}",
+            })
+
+        orchestrator = self._orchestrators[sport]
+
+        # Resolve match identifier
+        try:
+            resolved_match_id = await orchestrator.resolve_match_id(match_id)
+        except ValueError as e:
+            return (None, {
+                "status": "FAILED",
+                "reason": f"Match resolution failed: {str(e)}",
+            })
+
+        # Aggregate context
+        context = await orchestrator.aggregate_context(resolved_match_id)
+
+        # Validate context quality
+        validation = orchestrator.validate_context_quality(context)
+
+        if validation["status"] == "FAILED":
+            return (None, validation)
+
+        return (context, validation)
+
     async def handle_user_message(
         self,
         user_id: str,

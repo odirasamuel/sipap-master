@@ -603,15 +603,16 @@ class BatchOrchestrator:
         """
         Predict fixture by evaluating ALL markets and selecting the best one.
 
-        CRITICAL: This method evaluates ALL 44 betting markets for the fixture
-        and selects the market with the HIGHEST expected value (EV).
+        OPTIMIZED: This method aggregates context ONCE, then evaluates all 44 markets
+        using the SAME context. This reduces MCP calls by 44x compared to the old approach.
 
         Flow:
-        1. Get all 44 markets from registry
-        2. Call MainOrchestrator.predict() for EACH market (with retry logic)
-        3. Compare EV values across all markets
-        4. Select market with highest EV
-        5. Return that market's prediction with market explanation
+        1. Aggregate and validate context ONCE (7 MCP calls)
+        2. Get all 44 markets from registry
+        3. Evaluate each market using pre-aggregated context (no MCP calls)
+        4. Compare EV values across all markets
+        5. Select market with highest EV
+        6. Return that market's prediction with market explanation
 
         Retry Logic:
         - Transient errors (timeouts, rate limits, 503s) trigger exponential backoff retry
@@ -639,31 +640,58 @@ class BatchOrchestrator:
             }
 
         Raises:
-            Exception: If all market predictions fail
+            Exception: If context validation fails or all market predictions fail
         """
-        # Step 1: Get all markets
-        all_markets = get_all_markets()
-
-        self.logger.debug(
-            f"Evaluating {len(all_markets)} markets for fixture {fixture['id']}"
+        # Step 1: Aggregate and validate context ONCE (7 MCP calls total)
+        self.logger.info(
+            f"Aggregating context for fixture {fixture['id']}: "
+            f"{fixture.get('home_team')} vs {fixture.get('away_team')}"
         )
 
-        # Step 2: Evaluate each market
+        context, validation = await retry_with_backoff(
+            self.orchestrator.aggregate_and_validate_context,
+            sport="soccer",
+            match_id=fixture["id"],
+            max_attempts=3,
+            initial_delay=1.0,
+            backoff_factor=2.0,
+            logger=self.logger,
+        )
+
+        # If context validation failed, skip this fixture
+        if context is None:
+            self.logger.info(
+                f"Skipping fixture {fixture['id']} - context validation failed: {validation.get('reason')}"
+            )
+            raise Exception(f"Context validation failed: {validation.get('reason')}")
+
+        self.logger.info(
+            f"Context aggregated successfully for fixture {fixture['id']}"
+        )
+
+        # Step 2: Get all markets
+        all_markets = get_all_markets()
+
+        self.logger.info(
+            f"Evaluating {len(all_markets)} markets for fixture {fixture['id']} "
+            f"using pre-aggregated context (no additional MCP calls)"
+        )
+
+        # Step 3: Evaluate each market using pre-aggregated context
         market_predictions = []
         failed_markets = 0
 
         for market in all_markets:
             try:
-                # Wrap prediction call with retry logic for resilience
-                # Retries transient errors (timeouts, rate limits, 503s)
-                # Fast-fails on permanent errors (ValueError, KeyError)
+                # Use predict_with_context to avoid re-aggregating context
+                # This skips 7 MCP calls per market (44 markets × 7 = 308 calls saved per fixture)
                 prediction = await retry_with_backoff(
-                    self.orchestrator.predict,
+                    self.orchestrator.predict_with_context,
                     sport="soccer",
                     match_id=fixture["id"],
                     market=market.code,
+                    context=context,  # Pre-aggregated context (shared across all markets)
                     user_id=user_id,
-                    user_message=None,  # No user message for batch predictions
                     max_attempts=3,
                     initial_delay=1.0,
                     backoff_factor=2.0,
