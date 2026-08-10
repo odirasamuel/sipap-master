@@ -878,7 +878,7 @@ class MainOrchestrator:
 
         self.logger.info(
             f"Handling show_fixtures request for user {user_id}",
-            extra={"user_id": user_id, "intent": intent.intent}
+            extra={"user_id": user_id, "intent_type": intent.intent_type}
         )
 
         try:
