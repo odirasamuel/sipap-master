@@ -20,6 +20,7 @@ import json
 import logging
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import parse_qs, unquote
 
 import boto3
 from botocore.exceptions import ClientError
@@ -80,6 +81,44 @@ class SQSAdapter:
             extra={"queue_url": queue_url, "region": region}
         )
 
+    def _parse_twilio_form_data(self, body: str) -> dict[str, Any]:
+        """Parse Twilio form-urlencoded webhook data preserving original field names.
+
+        Twilio sends webhooks as form-urlencoded data with fields like:
+        - From=whatsapp%3A%2B2347025761599
+        - Body=What+are+the+matches+available...
+        - MessageSid=SM...
+
+        This preserves the Twilio field names so parse_whatsapp_message()
+        can handle it without modifications.
+
+        Args:
+            body: Raw form-urlencoded string from Twilio webhook
+
+        Returns:
+            Dict with Twilio field names: From, Body, MessageSid, etc.
+
+        Raises:
+            ValueError: If required fields are missing
+        """
+        # Parse form data (returns dict with lists as values)
+        parsed = parse_qs(body)
+
+        # Convert from {key: [value]} to {key: value} format
+        # Keep all Twilio fields for compatibility with parse_whatsapp_message()
+        result = {}
+        for key, values in parsed.items():
+            # Use first value from list
+            result[key] = values[0] if values else ""
+
+        # Validate required fields
+        if not result.get("From"):
+            raise ValueError("Missing 'From' field in Twilio webhook")
+        if not result.get("Body"):
+            raise ValueError("Missing 'Body' field in Twilio webhook")
+
+        return result
+
     def receive_messages(
         self,
         max_messages: int = 1,
@@ -117,17 +156,25 @@ class SQSAdapter:
 
             messages = []
             for msg in response["Messages"]:
-                # Parse body as JSON
+                # Parse body - try JSON first, then Twilio form data
                 try:
                     body = json.loads(msg["Body"])
-                except json.JSONDecodeError as e:
-                    logger.error(
-                        f"Failed to parse message body as JSON: {e}",
-                        extra={"message_id": msg["MessageId"]}
-                    )
-                    # Delete malformed message (permanent error)
-                    self.delete_message(msg["ReceiptHandle"])
-                    continue
+                except json.JSONDecodeError:
+                    # Not JSON - try parsing as Twilio form-urlencoded data
+                    try:
+                        body = self._parse_twilio_form_data(msg["Body"])
+                        logger.debug(
+                            "Parsed Twilio form data",
+                            extra={"message_id": msg["MessageId"], "phone": body.get("phone")}
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to parse message body as JSON or Twilio form data: {e}",
+                            extra={"message_id": msg["MessageId"], "body": msg["Body"][:200]}
+                        )
+                        # Delete malformed message (permanent error)
+                        self.delete_message(msg["ReceiptHandle"])
+                        continue
 
                 # Extract sent timestamp
                 sent_timestamp = int(msg.get("Attributes", {}).get("SentTimestamp", 0))
