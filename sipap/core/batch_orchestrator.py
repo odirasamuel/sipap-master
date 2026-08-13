@@ -105,7 +105,11 @@ class BatchOrchestrator:
             self.cache = None
             self.cache_enabled = False
 
-        self.logger.info("BatchOrchestrator initialized")
+        # Check if DEBUG logging is enabled
+        self.debug_enabled = self.logger.isEnabledFor(logging.DEBUG)
+
+        log_mode = "DEBUG mode enabled" if self.debug_enabled else "INFO mode (summary only)"
+        self.logger.info(f"BatchOrchestrator initialized - {log_mode}")
 
     def _calculate_ttl_until_end_of_day(self) -> int:
         """
@@ -286,19 +290,21 @@ class BatchOrchestrator:
                     selections.append(analysis)
                     accumulated_sum += analysis["bookmaker_odd"]
 
-                    self.logger.debug(
-                        f"Added fixture: {fixture.get('id')} "
-                        f"(odd: {analysis['bookmaker_odd']}, "
-                        f"accumulated: {accumulated_sum:.1f})"
-                    )
+                    # Log acceptance (INFO for visibility)
+                    if self.debug_enabled:
+                        self.logger.debug(
+                            f"✅ Added: {fixture.get('home_team')} vs {fixture.get('away_team')} - "
+                            f"{analysis['market_code']} @ {analysis['bookmaker_odd']} "
+                            f"(accumulated: {accumulated_sum:.1f}/{target})"
+                        )
                 else:
-                    self.logger.debug(
-                        f"Fixture {fixture.get('id')} failed quality gates: "
-                        f"conf={analysis['confidence']:.2f} "
-                        f"(need {thresholds['min_confidence']}), "
-                        f"ev={analysis['ev']:.2f} "
-                        f"(need {thresholds['min_ev']})"
-                    )
+                    # Log rejection only if DEBUG enabled (reduces noise)
+                    if self.debug_enabled:
+                        self.logger.debug(
+                            f"❌ Rejected: {fixture.get('home_team')} vs {fixture.get('away_team')} - "
+                            f"conf={analysis['confidence']:.2f} < {thresholds['min_confidence']}, "
+                            f"ev={analysis['ev']:.2f} < {thresholds['min_ev']}"
+                        )
 
             except Exception as e:
                 self.logger.error(
@@ -463,6 +469,7 @@ class BatchOrchestrator:
                         selections.append(analysis)
                         accumulated_sum += analysis["bookmaker_odd"]
 
+                        # Log acceptance (INFO for visibility)
                         self.logger.info(
                             f"✅ Added {fixture.get('home_team')} vs {fixture.get('away_team')} "
                             f"(date: {current_date.isoformat()}, "
@@ -470,11 +477,13 @@ class BatchOrchestrator:
                             f"accumulated: {accumulated_sum:.1f}/{target})"
                         )
                     else:
-                        self.logger.debug(
-                            f"❌ Rejected {fixture.get('home_team')} vs {fixture.get('away_team')} "
-                            f"(conf: {analysis['confidence']:.2f} < {thresholds['min_confidence']}, "
-                            f"ev: {analysis['ev']:.2f} < {thresholds['min_ev']})"
-                        )
+                        # Log rejection only if DEBUG enabled (reduces noise)
+                        if self.debug_enabled:
+                            self.logger.debug(
+                                f"❌ Rejected {fixture.get('home_team')} vs {fixture.get('away_team')} "
+                                f"(conf: {analysis['confidence']:.2f} < {thresholds['min_confidence']}, "
+                                f"ev: {analysis['ev']:.2f} < {thresholds['min_ev']})"
+                            )
 
                 except Exception as e:
                     self.logger.error(
@@ -743,14 +752,17 @@ class BatchOrchestrator:
                     if cached_result:
                         cache_hits += 1
                         market_predictions.append(cached_result)
-                        self.logger.debug(
-                            f"  {market.code}: CACHE HIT - {cached_result['best_outcome']} @ {cached_result['bookmaker_odd']} "
-                            f"(prob: {cached_result['probability']:.2f}, conf: {cached_result['confidence']:.2f}, ev: {cached_result['ev']:+.4f})"
-                        )
+                        # Only log cache hits if DEBUG enabled (reduces 44 logs per fixture)
+                        if self.debug_enabled:
+                            self.logger.debug(
+                                f"  {market.code}: CACHE HIT - {cached_result['best_outcome']} @ {cached_result['bookmaker_odd']} "
+                                f"(prob: {cached_result['probability']:.2f}, conf: {cached_result['confidence']:.2f}, ev: {cached_result['ev']:+.4f})"
+                            )
                         continue  # Skip to next market
                 except Exception as e:
-                    # Cache read failed - log and continue to MCP call
-                    self.logger.debug(f"Cache read failed for {cache_key}: {e}")
+                    # Cache read failed - log only if DEBUG (reduces noise)
+                    if self.debug_enabled:
+                        self.logger.debug(f"Cache read failed for {cache_key}: {e}")
 
             # Cache miss - call MCP tools
             cache_misses += 1
@@ -799,33 +811,38 @@ class BatchOrchestrator:
                     try:
                         ttl = self._calculate_ttl_until_end_of_day()
                         self.cache.set(cache_key, market_result, ttl=ttl)
-                        self.logger.debug(
-                            f"  {market.code}: {best_outcome} @ {bookmaker_odd} "
-                            f"(prob: {probability:.2f}, conf: {confidence:.2f}, ev: {ev_value:+.4f}) [CACHED, TTL={ttl}s]"
-                        )
+                        # Only log cache operations if DEBUG enabled
+                        if self.debug_enabled:
+                            self.logger.debug(
+                                f"  {market.code}: {best_outcome} @ {bookmaker_odd} "
+                                f"(prob: {probability:.2f}, conf: {confidence:.2f}, ev: {ev_value:+.4f}) [CACHED, TTL={ttl}s]"
+                            )
                     except Exception as e:
-                        # Cache write failed - log but continue (prediction still works)
-                        self.logger.debug(f"Cache write failed for {cache_key}: {e}")
-                        self.logger.debug(
-                            f"  {market.code}: {best_outcome} @ {bookmaker_odd} "
-                            f"(prob: {probability:.2f}, conf: {confidence:.2f}, ev: {ev_value:+.4f})"
-                        )
-                else:
+                        # Cache write failed - always log warnings
+                        if self.debug_enabled:
+                            self.logger.debug(f"Cache write failed for {cache_key}: {e}")
+                            self.logger.debug(
+                                f"  {market.code}: {best_outcome} @ {bookmaker_odd} "
+                                f"(prob: {probability:.2f}, conf: {confidence:.2f}, ev: {ev_value:+.4f})"
+                            )
+                elif self.debug_enabled:
+                    # Only log if DEBUG enabled
                     self.logger.debug(
                         f"  {market.code}: {best_outcome} @ {bookmaker_odd} "
                         f"(prob: {probability:.2f}, conf: {confidence:.2f}, ev: {ev_value:+.4f})"
                     )
 
             except (RetryExhausted, PermanentError) as e:
-                # Retry exhausted or permanent error - log and skip this market
-                self.logger.debug(
-                    f"Prediction failed for market {market.code} on fixture {fixture['id']}: {e}"
-                )
+                # Retry exhausted or permanent error - log only if DEBUG enabled
+                if self.debug_enabled:
+                    self.logger.debug(
+                        f"Prediction failed for market {market.code} on fixture {fixture['id']}: {e}"
+                    )
                 failed_markets += 1
                 continue
             except Exception as e:
-                # Unexpected error - log and skip this market
-                self.logger.debug(
+                # Unexpected error - always log (could be important)
+                self.logger.warning(
                     f"Unexpected error for market {market.code} on fixture {fixture['id']}: {e}"
                 )
                 failed_markets += 1
@@ -842,16 +859,15 @@ class BatchOrchestrator:
         # This prioritizes accuracy (what will happen) over expected value (what's profitable)
         best_market = max(market_predictions, key=lambda m: m["probability"])
 
-        # Log cache statistics
+        # Log summary (INFO level - always visible)
         cache_stats = ""
-        if self.cache_enabled:
-            cache_stats = f", cache: {cache_hits} hits / {cache_misses} misses ({cache_hits/(cache_hits+cache_misses)*100:.1f}% hit rate)" if (cache_hits + cache_misses) > 0 else ""
+        if self.cache_enabled and (cache_hits + cache_misses) > 0:
+            cache_stats = f", cache: {cache_hits}H/{cache_misses}M ({cache_hits/(cache_hits+cache_misses)*100:.0f}%)"
 
         self.logger.info(
-            f"Selected {best_market['market_code']} for fixture {fixture['id']}: "
-            f"{best_market['best_outcome']} @ {best_market['bookmaker_odd']} "
-            f"(prob: {best_market['probability']:.2f}, conf: {best_market['confidence']:.2f}, ev: {best_market['ev']:+.4f}) "
-            f"[evaluated {len(market_predictions)}/{len(all_markets)} markets, selected highest probability{cache_stats}]"
+            f"📊 {fixture.get('home_team')} vs {fixture.get('away_team')} → "
+            f"{best_market['market_code']}: {best_market['best_outcome']} @ {best_market['bookmaker_odd']} "
+            f"(prob={best_market['probability']:.2f}, conf={best_market['confidence']:.2f}{cache_stats})"
         )
 
         # Step 5: Return best market with fixture data

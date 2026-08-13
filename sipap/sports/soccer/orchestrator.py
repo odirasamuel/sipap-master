@@ -70,7 +70,11 @@ class SoccerOrchestrator:
 
         self.db = DatabaseManager(database_url, use_pool=True)
 
-        self.logger.info("SoccerOrchestrator initialized")
+        # Check if DEBUG logging is enabled
+        self.debug_enabled = self.logger.isEnabledFor(logging.DEBUG)
+
+        log_mode = "DEBUG mode enabled" if self.debug_enabled else "INFO mode (summary only)"
+        self.logger.info(f"SoccerOrchestrator initialized - {log_mode}")
 
     @retry_with_backoff(
         max_attempts=3,
@@ -457,7 +461,9 @@ class SoccerOrchestrator:
             >>> predictions = await orchestrator.run_agent_predictions(context, "1X2")
             >>> assert len(predictions) == 5  # 5 agents
         """
-        self.logger.debug(f"Running agent predictions for market: {market}")
+        # Only log if DEBUG enabled
+        if self.debug_enabled:
+            self.logger.debug(f"Running agent predictions for market: {market}")
 
         # Step 1: Load all tools
         tools = await self.load_agent_tools()
@@ -497,14 +503,18 @@ Focus on your specialized analysis approach based on your role.
 """
 
         # Step 4: Create agents (3-agent ensemble: Statistical, Form, News)
-        self.logger.debug("Creating agents...")
+        # Create agents (only log if DEBUG enabled)
+        if self.debug_enabled:
+            self.logger.debug("Creating agents...")
         agents: dict[str, Any] = {}
         for agent_name in ["statistical", "form", "news"]:
             try:
                 agent = self.agent_factory.create(agent_name, tools=agent_tools[agent_name])
                 agents[agent_name] = agent
-                self.logger.debug(f"Created agent: {agent_name}")
+                if self.debug_enabled:
+                    self.logger.debug(f"Created agent: {agent_name}")
             except Exception as e:
+                # Always log errors
                 self.logger.error(
                     f"Failed to create agent: {agent_name}",
                     extra={"error": str(e)},
@@ -516,15 +526,19 @@ Focus on your specialized analysis approach based on your role.
             raise RuntimeError("Failed to create any agents")
 
         # Step 5: Execute all agents in parallel
-        self.logger.info(f"Executing {len(agents)} agents in parallel for market: {market}")
+        if self.debug_enabled:
+            self.logger.debug(f"Executing {len(agents)} agents in parallel for market: {market}")
 
         async def run_agent(name: str, agent: Any) -> tuple[str, Any]:
             """Execute single agent and return (name, result)."""
             try:
                 result = await agent(prompt)
-                self.logger.info(f"Agent {name} completed successfully")
+                # Only log individual agent completion if DEBUG enabled
+                if self.debug_enabled:
+                    self.logger.debug(f"Agent {name} completed")
                 return (name, result)
             except Exception as e:
+                # Always log errors
                 self.logger.error(
                     f"Agent {name} failed",
                     extra={"error": str(e)},
@@ -561,11 +575,13 @@ Focus on your specialized analysis approach based on your role.
                         "evidence": structured.evidence,
                         "metadata": structured.metadata if hasattr(structured, "metadata") else {},
                     }
-                    self.logger.info(
-                        f"Agent {agent_name} prediction: {prediction_data['prediction']['outcome']} "
-                        f"(prob: {prediction_data['prediction']['probability']:.2f}, "
-                        f"conf: {prediction_data['prediction']['confidence']})"
-                    )
+                    # Only log individual agent predictions if DEBUG enabled
+                    if self.debug_enabled:
+                        self.logger.debug(
+                            f"Agent {agent_name} → {prediction_data['prediction']['outcome']} "
+                            f"(prob: {prediction_data['prediction']['probability']:.2f}, "
+                            f"conf: {prediction_data['prediction']['confidence']})"
+                        )
                 else:
                     # Fallback: try to parse from result object
                     self.logger.warning(
@@ -586,10 +602,12 @@ Focus on your specialized analysis approach based on your role.
                     }
 
                 predictions.append(prediction_data)
-                self.logger.debug(
-                    f"Parsed prediction from {agent_name}",
-                    extra={"prediction": prediction_data["prediction"]},
-                )
+                # Parsing details only if DEBUG enabled
+                if self.debug_enabled:
+                    self.logger.debug(
+                        f"Parsed prediction from {agent_name}",
+                        extra={"prediction": prediction_data["prediction"]},
+                    )
 
             except Exception as e:
                 self.logger.error(
@@ -602,10 +620,12 @@ Focus on your specialized analysis approach based on your role.
         if not predictions:
             raise RuntimeError("No agent predictions were successfully generated")
 
-        self.logger.info(
-            f"Agent predictions complete: {len(predictions)}/{len(agents)} agents succeeded",
-            extra={"successful_agents": [p["agent"] for p in predictions]},
-        )
+        # Log summary with agent outcomes (INFO - always visible)
+        agent_summary = ", ".join([
+            f"{p['agent'][0].upper()}={p['prediction']['probability']:.2f}"
+            for p in predictions
+        ])
+        self.logger.info(f"🤖 Agents [{agent_summary}] → {len(predictions)}/{len(agents)} succeeded")
 
         return predictions
 
@@ -624,7 +644,9 @@ Focus on your specialized analysis approach based on your role.
         Returns:
             Validation result with status and missing fields
         """
-        self.logger.debug("Validating context quality")
+        # Only log validation details if DEBUG enabled
+        if self.debug_enabled:
+            self.logger.debug("Validating context quality")
 
         # Define critical fields
         critical_fields = [

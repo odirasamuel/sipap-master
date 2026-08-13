@@ -44,6 +44,9 @@ class MainOrchestrator:
         """
         self.logger = logger or logging.getLogger(__name__)
 
+        # Check if DEBUG logging is enabled
+        self.debug_enabled = self.logger.isEnabledFor(logging.DEBUG)
+
         # Initialize conversation manager for multi-turn conversations
         self.conversation_manager = ConversationManager(logger=self.logger)
 
@@ -67,8 +70,9 @@ class MainOrchestrator:
             # Future: "tennis": TennisOrchestrator(logger=self.logger),
         }
 
+        log_mode = "DEBUG mode enabled" if self.debug_enabled else "INFO mode (summary only)"
         self.logger.info(
-            "MainOrchestrator initialized",
+            f"MainOrchestrator initialized - {log_mode}",
             extra={"supported_sports": list(self._orchestrators.keys())},
         )
 
@@ -146,7 +150,8 @@ class MainOrchestrator:
         orchestrator = self._orchestrators[sport]
 
         # Step 0: Resolve match identifier (UUID or natural language)
-        self.logger.debug("Step 0: Resolving match identifier")
+        if self.debug_enabled:
+            self.logger.debug("Step 0: Resolving match identifier")
         try:
             resolved_match_id = await orchestrator.resolve_match_id(match_id)
         except ValueError as e:
@@ -157,11 +162,13 @@ class MainOrchestrator:
             }
 
         # Step 1: Aggregate context from MCP servers
-        self.logger.debug("Step 1: Aggregating context from MCP servers")
+        if self.debug_enabled:
+            self.logger.debug("Step 1: Aggregating context from MCP servers")
         context = await orchestrator.aggregate_context(resolved_match_id)
 
         # Step 2: Validate context quality
-        self.logger.debug("Step 2: Validating context quality")
+        if self.debug_enabled:
+            self.logger.debug("Step 2: Validating context quality")
         validation = orchestrator.validate_context_quality(context)
 
         if validation["status"] == "FAILED":
@@ -173,12 +180,14 @@ class MainOrchestrator:
             }
 
         # Step 3: Run ensemble prediction with real AI agents
-        self.logger.debug("Step 3: Running AI agent predictions")
+        if self.debug_enabled:
+            self.logger.debug("Step 3: Running AI agent predictions")
 
         try:
-            # Execute all 5 specialized agents
+            # Execute all 3 specialized agents
             agent_predictions = await orchestrator.run_agent_predictions(context, market)
         except Exception as e:
+            # Always log errors
             self.logger.error(
                 f"Agent execution failed: {e}",
                 exc_info=True,
@@ -191,14 +200,16 @@ class MainOrchestrator:
 
         # Calculate ensemble from agent predictions
         ensemble = orchestrator._calculate_ensemble(agent_predictions, market)
+        # Log ensemble result (INFO - always visible)
         self.logger.info(
-            f"Ensemble result: {ensemble.get('outcome', 'Unknown')} "
-            f"(prob: {ensemble.get('probability', 0):.2f}, "
-            f"conf: {ensemble.get('confidence', 0):.0f}%)"
+            f"🎯 Ensemble: {ensemble.get('outcome', 'Unknown')} "
+            f"(prob={ensemble.get('probability', 0):.2f}, "
+            f"conf={ensemble.get('confidence', 0):.0f}%)"
         )
 
         # Step 4: Calculate expected value
-        self.logger.debug("Step 4: Calculating expected value")
+        if self.debug_enabled:
+            self.logger.debug("Step 4: Calculating expected value")
         odds = context.get("odds", {})
         ev_analysis = orchestrator.calculate_expected_value(ensemble, odds)
 
@@ -206,11 +217,13 @@ class MainOrchestrator:
         ensemble["expected_value"] = ev_analysis
 
         # Step 5: Apply quality gates
-        self.logger.debug("Step 5: Applying quality gates")
+        if self.debug_enabled:
+            self.logger.debug("Step 5: Applying quality gates")
         final_prediction: dict[str, Any] = orchestrator._apply_quality_gates(ensemble, agent_predictions)
 
         # Step 6: Save prediction
-        self.logger.debug("Step 6: Saving prediction to database")
+        if self.debug_enabled:
+            self.logger.debug("Step 6: Saving prediction to database")
         save_result = await orchestrator.save_prediction(resolved_match_id, final_prediction, context)
 
         # Add save result to prediction
