@@ -700,6 +700,7 @@ class BatchOrchestrator:
 
                 # Extract data
                 best_outcome = prediction.get("outcome", "Unknown")
+                probability = prediction.get("probability", 0.0)  # Ensemble probability (0-1)
                 ev_analysis = prediction.get("expected_value", {})
                 bookmaker_odd = ev_analysis.get("odds", 0.0)
                 ev_value = ev_analysis.get("expected_value", 0.0)
@@ -712,14 +713,15 @@ class BatchOrchestrator:
                     "market_code": market.code,
                     "market_name": market.name,
                     "best_outcome": best_outcome,
+                    "probability": probability,  # Likelihood of outcome occurring
                     "bookmaker_odd": bookmaker_odd,
-                    "confidence": confidence,
+                    "confidence": confidence,  # How certain we are about the probability
                     "ev": ev_value,
                 })
 
                 self.logger.debug(
                     f"  {market.code}: {best_outcome} @ {bookmaker_odd} "
-                    f"(conf: {confidence:.2f}, ev: {ev_value:+.4f})"
+                    f"(prob: {probability:.2f}, conf: {confidence:.2f}, ev: {ev_value:+.4f})"
                 )
 
             except (RetryExhausted, PermanentError) as e:
@@ -743,14 +745,16 @@ class BatchOrchestrator:
                 f"All {len(all_markets)} market predictions failed for fixture {fixture['id']}"
             )
 
-        # Step 4: Select market with highest EV
-        best_market = max(market_predictions, key=lambda m: m["ev"])
+        # Step 4: Select market with highest PROBABILITY
+        # Strategy: Pick the most likely outcome per fixture, not the highest value bet
+        # This prioritizes accuracy (what will happen) over expected value (what's profitable)
+        best_market = max(market_predictions, key=lambda m: m["probability"])
 
         self.logger.info(
             f"Selected {best_market['market_code']} for fixture {fixture['id']}: "
             f"{best_market['best_outcome']} @ {best_market['bookmaker_odd']} "
-            f"(conf: {best_market['confidence']:.2f}, ev: {best_market['ev']:+.4f}) "
-            f"[evaluated {len(market_predictions)}/{len(all_markets)} markets]"
+            f"(prob: {best_market['probability']:.2f}, conf: {best_market['confidence']:.2f}, ev: {best_market['ev']:+.4f}) "
+            f"[evaluated {len(market_predictions)}/{len(all_markets)} markets, selected highest probability]"
         )
 
         # Step 5: Return best market with fixture data
@@ -759,8 +763,9 @@ class BatchOrchestrator:
             "market_code": best_market["market_code"],
             "market_name": best_market["market_name"],
             "best_outcome": best_market["best_outcome"],
+            "probability": best_market["probability"],  # Likelihood of outcome (0-1)
             "bookmaker_odd": best_market["bookmaker_odd"],
-            "confidence": best_market["confidence"],
+            "confidence": best_market["confidence"],  # Certainty about probability (0-1)
             "ev": best_market["ev"],
             "markets_evaluated": len(market_predictions),
         }
