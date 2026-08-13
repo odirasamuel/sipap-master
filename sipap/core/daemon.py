@@ -288,7 +288,9 @@ async def send_whatsapp_response(
             exc_info=True,
             extra={"phone": phone}
         )
-        return False
+        # Re-raise exception to preserve error type for classification
+        # (don't return False - let caller handle the exception)
+        raise
 
 
 async def process_message(
@@ -337,13 +339,10 @@ async def process_message(
         # Process message (generate prediction)
         response = await process_whatsapp_message(whatsapp_msg, orchestrator)
 
-        # Send WhatsApp response
-        success = await send_whatsapp_response(
+        # Send WhatsApp response (raises exception on failure)
+        await send_whatsapp_response(
             whatsapp_msg["phone"], response, twilio_client
         )
-
-        if not success:
-            raise ConnectionError("Failed to send WhatsApp response")
 
         # Delete message from queue (success)
         sqs_adapter.delete_message(message.receipt_handle)
@@ -507,6 +506,10 @@ def start_daemon(
     """
     # Check if WhatsApp delivery is enabled
     enable_whatsapp_delivery = os.getenv("ENABLE_WHATSAPP_DELIVERY", "false").lower() == "true"
+
+    # Reduce Twilio SDK logging verbosity (default INFO is too verbose)
+    # Twilio logs every HTTP request/response at INFO, generating 4-6 lines per API call
+    logging.getLogger("twilio.http_client").setLevel(logging.WARNING)
 
     logger.info("=" * 70)
     logger.info("SIPAP Orchestrator - Daemon Mode")

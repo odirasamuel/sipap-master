@@ -28,6 +28,12 @@ from typing import Type
 
 from botocore.exceptions import ClientError
 
+try:
+    from twilio.base.exceptions import TwilioRestException
+except ImportError:
+    # Twilio not installed (optional dependency)
+    TwilioRestException = None  # type: ignore[misc,assignment]
+
 logger = logging.getLogger(__name__)
 
 
@@ -108,6 +114,10 @@ def classify_error(error: Exception) -> ErrorType:
     # Special handling for AWS ClientError
     if isinstance(error, ClientError):
         return _classify_client_error(error)
+
+    # Special handling for Twilio errors
+    if TwilioRestException and isinstance(error, TwilioRestException):
+        return _classify_twilio_error(error)
 
     # Check error message content for known patterns
     error_message = str(error).lower()
@@ -203,5 +213,75 @@ def _classify_client_error(error: ClientError) -> ErrorType:
     logger.warning(
         f"Unknown AWS error code, defaulting to TRANSIENT: {error_code}",
         extra={"error_type": "transient", "error_code": error_code}
+    )
+    return ErrorType.TRANSIENT
+
+
+def _classify_twilio_error(error: "TwilioRestException") -> ErrorType:
+    """Classify Twilio API error as permanent or transient.
+
+    Args:
+        error: TwilioRestException
+
+    Returns:
+        ErrorType.PERMANENT or ErrorType.TRANSIENT
+
+    Twilio Error Codes:
+        - 4xx (400-499): Client errors (permanent - bad input, invalid phone, etc.)
+        - 5xx (500-599): Server errors (transient - retry)
+        - 429: Rate limit (transient - retry)
+
+    Example:
+        >>> # Error 21211: Invalid phone number (400) → PERMANENT
+        >>> # Error 20429: Rate limit (429) → TRANSIENT
+        >>> # Error 20500: Internal error (500) → TRANSIENT
+    """
+    status = error.status
+
+    # Client errors (4xx): Permanent - bad request, invalid input
+    if status and 400 <= status < 500:
+        # Exception: 429 is rate limiting (transient)
+        if status == 429:
+            logger.info(
+                f"Twilio rate limit error, classified as TRANSIENT",
+                extra={
+                    "error_type": "transient",
+                    "error_code": error.code,
+                    "status": status
+                }
+            )
+            return ErrorType.TRANSIENT
+
+        # All other 4xx errors are permanent (invalid phone, bad params, etc.)
+        logger.info(
+            f"Twilio client error (4xx), classified as PERMANENT: {error.code} - {error.msg}",
+            extra={
+                "error_type": "permanent",
+                "error_code": error.code,
+                "status": status
+            }
+        )
+        return ErrorType.PERMANENT
+
+    # Server errors (5xx): Transient - retry
+    if status and status >= 500:
+        logger.info(
+            f"Twilio server error (5xx), classified as TRANSIENT: {error.code}",
+            extra={
+                "error_type": "transient",
+                "error_code": error.code,
+                "status": status
+            }
+        )
+        return ErrorType.TRANSIENT
+
+    # Default: Transient (retry unknown Twilio errors)
+    logger.warning(
+        f"Unknown Twilio error status, defaulting to TRANSIENT: {error.code}",
+        extra={
+            "error_type": "transient",
+            "error_code": error.code,
+            "status": status
+        }
     )
     return ErrorType.TRANSIENT
