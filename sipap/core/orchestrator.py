@@ -829,27 +829,16 @@ class MainOrchestrator:
             # Full message
             full_message = header + selections_str + warning_text
 
-            # Paginate if needed
+            # Paginate if needed (automatic multi-message sending)
             if len(full_message) > 1600:
-                # Split selections if too long
-                page_selections = []
-                current_length = len(header) + 100  # Reserve for footer
-
-                for sel_line in selections_text:
-                    if current_length + len(sel_line) + 1 > 1500:  # Reserve 100 for footer
-                        break
-                    page_selections.append(sel_line)
-                    current_length += len(sel_line) + 1
-
-                shown = len(page_selections)
-                remaining = num_selections - shown
-
-                selections_str = "\n".join(page_selections)
-                footer = ""
-                if remaining > 0:
-                    footer = f"\n\n📄 Showing {shown}/{num_selections}\n💬 Reply 'more' for remaining {remaining}"
-
-                message = header + selections_str + warning_text + footer
+                # Use _paginate_message to split into pages with [PAGE_BREAK] markers
+                # The daemon will automatically send multiple messages
+                message = self._paginate_message(
+                    header=header + warning_text + "\n",
+                    lines=selections_text,
+                    max_length=1600,
+                    total_count=num_selections
+                )
             else:
                 message = full_message
 
