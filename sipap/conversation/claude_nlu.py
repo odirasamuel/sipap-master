@@ -43,19 +43,25 @@ class ClaudeNLUClient:
     def __init__(
         self,
         region: str = "us-east-1",
-        model_id: str = "anthropic.claude-sonnet-4-5-20250929-v1:0",
+        model_id: str | None = None,
         logger: logging.Logger | None = None,
     ):
         """Initialize Claude NLU client.
 
         Args:
             region: AWS region for Bedrock
-            model_id: Claude model ID (default: Claude Sonnet 4.5)
+            model_id: Claude model/profile ID or ARN (default: from BEDROCK_PROFILE_ARN env var)
             logger: Optional logger instance
         """
         self.region = region
-        self.model_id = model_id
         self.logger = logger or get_logger(__name__)
+
+        # Use inference profile ARN from environment if available, fallback to model_id parameter
+        # Bedrock requires inference profile ARN, not model ID directly
+        self.model_id = model_id or os.getenv(
+            "BEDROCK_PROFILE_ARN",
+            "anthropic.claude-sonnet-4-5-20250929-v1:0"
+        )
 
         # Initialize Bedrock runtime client
         self.bedrock = boto3.client(
@@ -64,7 +70,7 @@ class ClaudeNLUClient:
         )
 
         self.logger.info(
-            f"Claude NLU client initialized (model: {model_id}, region: {region})"
+            f"Claude NLU client initialized (model/profile: {self.model_id}, region: {region})"
         )
 
     async def generate_clarification(
