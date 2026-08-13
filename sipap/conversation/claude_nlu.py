@@ -1,6 +1,6 @@
 """Claude-powered conversational NLU for intelligent clarification.
 
-Uses AWS Bedrock Claude 3.5 Sonnet to generate natural, context-aware
+Uses AWS Bedrock Claude Sonnet 4.5 to generate natural, context-aware
 clarification responses instead of hardcoded templates.
 
 Pattern adapted from Sentinel's Claude integration.
@@ -22,7 +22,7 @@ from sipap_common.logging import get_logger
 class ClaudeNLUClient:
     """Claude AI client for conversational NLU clarification.
 
-    Uses AWS Bedrock Claude 3.5 Sonnet to generate intelligent,
+    Uses AWS Bedrock Claude Sonnet 4.5 to generate intelligent,
     context-aware clarification responses that:
     - Understand user intent even when unclear
     - Provide helpful guidance in natural language
@@ -43,14 +43,14 @@ class ClaudeNLUClient:
     def __init__(
         self,
         region: str = "us-east-1",
-        model_id: str = "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        model_id: str = "anthropic.claude-sonnet-4-5-20250929-v1:0",
         logger: logging.Logger | None = None,
     ):
         """Initialize Claude NLU client.
 
         Args:
             region: AWS region for Bedrock
-            model_id: Claude model ID (default: Claude 3.5 Sonnet v2)
+            model_id: Claude model ID (default: Claude Sonnet 4.5)
             logger: Optional logger instance
         """
         self.region = region
