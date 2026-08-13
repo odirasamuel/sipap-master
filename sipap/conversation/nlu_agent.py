@@ -105,14 +105,16 @@ class NLUAgent:
         20
     """
 
-    def __init__(self, logger: logging.Logger | None = None):
+    def __init__(self, logger: logging.Logger | None = None, use_claude: bool = True):
         """
         Initialize NLU agent.
 
         Args:
             logger: Optional logger instance
+            use_claude: Use Claude for clarifications (default: True)
         """
         self.logger = logger or get_logger(__name__)
+        self.use_claude = use_claude
 
         # Regex fallback parser (existing IntentParser)
         self.regex_parser = IntentParser(logger=self.logger)
@@ -121,9 +123,10 @@ class NLUAgent:
         self._claude_agent: Any | None = None
 
         # Clarification agent for intelligent error handling
-        self.clarification_agent = ClarificationAgent(logger=self.logger)
+        self.clarification_agent = ClarificationAgent(logger=self.logger, use_claude=self.use_claude)
 
-        self.logger.info("NLUAgent initialized with Claude + regex fallback + clarification")
+        claude_status = "enabled" if self.use_claude else "disabled"
+        self.logger.info(f"NLUAgent initialized with Claude + regex fallback + clarification (Claude NLU: {claude_status})")
 
     async def parse_user_message(
         self,
