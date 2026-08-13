@@ -18,12 +18,14 @@ Pattern adapted from Sentinel's batch processing patterns.
 
 import json
 import logging
+import os
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sipap.conversation import RequestIntent
 from sipap.core.retry import PermanentError, RetryExhausted, retry_with_backoff
 from sipap.sports.soccer.markets import get_all_markets
+from sipap_common.cache.redis_adapter import RedisCache
 from sipap_common.logging import get_logger
 
 
@@ -79,7 +81,50 @@ class BatchOrchestrator:
             "medium": {"min_confidence": 0.55, "min_ev": 0.00},  # Decent
         }
 
+        # Initialize Redis cache for fixture evaluations
+        # Cache expires at end of day (predictions stay valid for current day only)
+        redis_host = os.environ.get("REDIS_HOST", "localhost")
+        redis_port = int(os.environ.get("REDIS_PORT", "6379"))
+        redis_password = os.environ.get("REDIS_PASSWORD", None)
+
+        try:
+            self.cache = RedisCache(
+                host=redis_host,
+                port=redis_port,
+                password=redis_password,
+                default_ttl=3600,  # 1 hour default (actual TTL calculated per-day)
+            )
+            self.cache_enabled = True
+            self.logger.info(
+                f"Redis cache initialized for fixture evaluations (host: {redis_host}:{redis_port})"
+            )
+        except Exception as e:
+            self.logger.warning(
+                f"Failed to initialize Redis cache - predictions will not be cached: {e}"
+            )
+            self.cache = None
+            self.cache_enabled = False
+
         self.logger.info("BatchOrchestrator initialized")
+
+    def _calculate_ttl_until_end_of_day(self) -> int:
+        """
+        Calculate TTL in seconds until end of current day (midnight UTC).
+
+        Returns:
+            Number of seconds until 23:59:59 UTC today
+
+        Examples:
+            >>> # At 2026-08-13 14:30:00 UTC
+            >>> ttl = self._calculate_ttl_until_end_of_day()
+            >>> # Returns ~34,200 seconds (9.5 hours remaining in day)
+        """
+        now = datetime.now(UTC)
+        end_of_day = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+        ttl_seconds = int((end_of_day - now).total_seconds())
+
+        # Ensure TTL is at least 60 seconds (avoid 0 or negative TTL)
+        return max(ttl_seconds, 60)
 
     async def process_batch_request(
         self,
@@ -678,10 +723,38 @@ class BatchOrchestrator:
         )
 
         # Step 3: Evaluate each market using pre-aggregated context
+        # WITH CACHING: Check cache first, only call MCP tools on cache miss
         market_predictions = []
         failed_markets = 0
+        cache_hits = 0
+        cache_misses = 0
+
+        # Get current date for cache key
+        current_date = date.today().isoformat()  # Format: YYYY-MM-DD
 
         for market in all_markets:
+            # Try cache first (if enabled)
+            cache_key = f"prediction:{fixture['id']}:{market.code}:{current_date}"
+            cached_result = None
+
+            if self.cache_enabled:
+                try:
+                    cached_result = self.cache.get(cache_key)
+                    if cached_result:
+                        cache_hits += 1
+                        market_predictions.append(cached_result)
+                        self.logger.debug(
+                            f"  {market.code}: CACHE HIT - {cached_result['best_outcome']} @ {cached_result['bookmaker_odd']} "
+                            f"(prob: {cached_result['probability']:.2f}, conf: {cached_result['confidence']:.2f}, ev: {cached_result['ev']:+.4f})"
+                        )
+                        continue  # Skip to next market
+                except Exception as e:
+                    # Cache read failed - log and continue to MCP call
+                    self.logger.debug(f"Cache read failed for {cache_key}: {e}")
+
+            # Cache miss - call MCP tools
+            cache_misses += 1
+
             try:
                 # Use predict_with_context to avoid re-aggregating context
                 # This skips 7 MCP calls per market (44 markets × 7 = 308 calls saved per fixture)
@@ -709,7 +782,7 @@ class BatchOrchestrator:
                 confidence_raw = prediction.get("confidence", 0)
                 confidence = confidence_raw / 100.0 if confidence_raw > 1 else confidence_raw
 
-                market_predictions.append({
+                market_result = {
                     "market_code": market.code,
                     "market_name": market.name,
                     "best_outcome": best_outcome,
@@ -717,12 +790,31 @@ class BatchOrchestrator:
                     "bookmaker_odd": bookmaker_odd,
                     "confidence": confidence,  # How certain we are about the probability
                     "ev": ev_value,
-                })
+                }
 
-                self.logger.debug(
-                    f"  {market.code}: {best_outcome} @ {bookmaker_odd} "
-                    f"(prob: {probability:.2f}, conf: {confidence:.2f}, ev: {ev_value:+.4f})"
-                )
+                market_predictions.append(market_result)
+
+                # Cache the result (expires at end of day)
+                if self.cache_enabled:
+                    try:
+                        ttl = self._calculate_ttl_until_end_of_day()
+                        self.cache.set(cache_key, market_result, ttl=ttl)
+                        self.logger.debug(
+                            f"  {market.code}: {best_outcome} @ {bookmaker_odd} "
+                            f"(prob: {probability:.2f}, conf: {confidence:.2f}, ev: {ev_value:+.4f}) [CACHED, TTL={ttl}s]"
+                        )
+                    except Exception as e:
+                        # Cache write failed - log but continue (prediction still works)
+                        self.logger.debug(f"Cache write failed for {cache_key}: {e}")
+                        self.logger.debug(
+                            f"  {market.code}: {best_outcome} @ {bookmaker_odd} "
+                            f"(prob: {probability:.2f}, conf: {confidence:.2f}, ev: {ev_value:+.4f})"
+                        )
+                else:
+                    self.logger.debug(
+                        f"  {market.code}: {best_outcome} @ {bookmaker_odd} "
+                        f"(prob: {probability:.2f}, conf: {confidence:.2f}, ev: {ev_value:+.4f})"
+                    )
 
             except (RetryExhausted, PermanentError) as e:
                 # Retry exhausted or permanent error - log and skip this market
@@ -750,11 +842,16 @@ class BatchOrchestrator:
         # This prioritizes accuracy (what will happen) over expected value (what's profitable)
         best_market = max(market_predictions, key=lambda m: m["probability"])
 
+        # Log cache statistics
+        cache_stats = ""
+        if self.cache_enabled:
+            cache_stats = f", cache: {cache_hits} hits / {cache_misses} misses ({cache_hits/(cache_hits+cache_misses)*100:.1f}% hit rate)" if (cache_hits + cache_misses) > 0 else ""
+
         self.logger.info(
             f"Selected {best_market['market_code']} for fixture {fixture['id']}: "
             f"{best_market['best_outcome']} @ {best_market['bookmaker_odd']} "
             f"(prob: {best_market['probability']:.2f}, conf: {best_market['confidence']:.2f}, ev: {best_market['ev']:+.4f}) "
-            f"[evaluated {len(market_predictions)}/{len(all_markets)} markets, selected highest probability]"
+            f"[evaluated {len(market_predictions)}/{len(all_markets)} markets, selected highest probability{cache_stats}]"
         )
 
         # Step 5: Return best market with fixture data
