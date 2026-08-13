@@ -433,8 +433,8 @@ class NLUAgent:
             quality_threshold = "high"
             entities["quality_terms"] = ["best possible", "good chance", "success"]
 
-        # Extract leagues using comprehensive mappings (380 competitions)
-        from sipap.config.league_mappings import find_league_matches
+        # Extract leagues using comprehensive mappings (380 competitions) from sipap-common
+        from sipap_common.data import find_league_matches
 
         leagues = find_league_matches(message)
 

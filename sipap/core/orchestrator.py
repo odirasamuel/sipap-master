@@ -1277,8 +1277,8 @@ class MainOrchestrator:
             entities = intent.extracted_entities or {}
 
             # Map country names to league names
-            # Use comprehensive league mappings (380 competitions)
-            from sipap.config.league_mappings import find_league_matches
+            # Use comprehensive league mappings (380 competitions) from sipap-common
+            from sipap_common.data import find_league_matches
 
             # Find league matches from user query (country names, competition aliases, etc.)
             matched_leagues = find_league_matches(intent.original_query)
