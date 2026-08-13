@@ -787,43 +787,71 @@ class MainOrchestrator:
 
             filters_str = "\n".join(filters_text) if filters_text else "No filters applied"
 
-            # Build selections text
+            # Build selections text (condensed format)
+            # Format: "1. Arsenal v Chelsea - Home @2.5 (65%, +8%) [PL]"
             selections_text = []
             for i, selection in enumerate(result["selections"], 1):
                 fixture = selection["fixture"]
                 home = fixture.get("home_team", {}).get("name", "Home")
                 away = fixture.get("away_team", {}).get("name", "Away")
+                league = fixture.get("league", {}).get("name", "")
 
-                # Market information (NEW: explain what market was selected)
-                market_code = selection.get("market_code", "Unknown")
-                market_name = selection.get("market_name", "Unknown Market")
                 outcome = selection["best_outcome"]
                 odd = selection["bookmaker_odd"]
                 conf = selection["confidence"]
                 ev = selection["ev"]
 
-                selections_text.append(
-                    f"{i}. {home} vs {away}\n"
-                    f"   Market: {market_name} ({market_code})\n"
-                    f"   Prediction: {outcome} @ {odd:.1f} odds\n"
-                    f"   Confidence: {conf:.0%} | EV: {ev:+.1%}"
-                )
+                # Abbreviate league
+                league_abbrev = self._abbreviate_league(league)
 
-            selections_str = "\n\n".join(selections_text) if selections_text else "No selections"
+                # Condensed format
+                line = f"{i}. {home} v {away} - {outcome} @{odd:.1f} ({conf:.0%}, {ev:+.0%})"
+                if league_abbrev:
+                    line += f" [{league_abbrev}]"
+                selections_text.append(line)
+
+            selections_str = "\n".join(selections_text) if selections_text else "No selections"
 
             # Warning text if target not reached
             warning_text = ""
             if warning:
-                warning_text = f"\n\n⚠️ {warning}"
+                warning_text = f"\n⚠️ {warning}"
 
-            message = (
-                f"🎯 Batch Prediction Results\n\n"
-                f"Target: {target:.1f} accumulated odds\n"
-                f"Achieved: {accumulated_odds:.1f} odds ({num_selections} fixtures)\n\n"
-                f"{filters_str}\n\n"
-                f"📊 Selections:\n\n{selections_str}"
-                f"{warning_text}"
+            # Build header
+            header = (
+                f"🎯 Batch Prediction\n"
+                f"Target: {target:.1f} | Achieved: {accumulated_odds:.1f} ({num_selections})\n"
             )
+            if filters_str:
+                header += f"{filters_str}\n"
+            header += f"\n📊 Selections:\n"
+
+            # Full message
+            full_message = header + selections_str + warning_text
+
+            # Paginate if needed
+            if len(full_message) > 1600:
+                # Split selections if too long
+                page_selections = []
+                current_length = len(header) + 100  # Reserve for footer
+
+                for sel_line in selections_text:
+                    if current_length + len(sel_line) + 1 > 1500:  # Reserve 100 for footer
+                        break
+                    page_selections.append(sel_line)
+                    current_length += len(sel_line) + 1
+
+                shown = len(page_selections)
+                remaining = num_selections - shown
+
+                selections_str = "\n".join(page_selections)
+                footer = ""
+                if remaining > 0:
+                    footer = f"\n\n📄 Showing {shown}/{num_selections}\n💬 Reply 'more' for remaining {remaining}"
+
+                message = header + selections_str + warning_text + footer
+            else:
+                message = full_message
 
             return {
                 "message": message,
@@ -1047,6 +1075,164 @@ class MainOrchestrator:
                 "error": str(e),
             }
 
+    def _format_fixtures_with_pagination(
+        self,
+        fixtures: list[dict[str, Any]],
+        count: int,
+        filters_applied: dict[str, Any],
+        params: dict[str, Any],
+        max_length: int = 1600,
+    ) -> str:
+        """Format fixtures in condensed format with automatic pagination.
+
+        Condensed format examples:
+        - Scheduled: ⚽ 15:00 Arsenal v Chelsea (PL) - 2.50/3.20/2.80
+        - Finished: ✅ Arsenal 2-1 Chelsea (Premier League)
+        - Live: 🔴 Arsenal 1-0 Chelsea 45' (Premier League)
+
+        Args:
+            fixtures: List of fixture dictionaries
+            count: Total count of fixtures
+            filters_applied: Filters that were applied
+            params: Query parameters
+            max_length: Maximum message length (default 1600 chars for WhatsApp)
+
+        Returns:
+            Formatted fixture message (or first page if pagination needed)
+        """
+        from datetime import datetime
+
+        # Build header
+        header = f"📅 Fixtures ({count} found)\n"
+        if filters_applied.get("leagues"):
+            header += f"🔍 {', '.join(filters_applied['leagues'])}\n"
+        header += "\n"
+
+        lines = []
+
+        for fixture in fixtures:
+            home = fixture.get("home_team", "Unknown")
+            away = fixture.get("away_team", "Unknown")
+            league = fixture.get("league", "")
+            status = fixture.get("status", "NS")  # NS, FT, 1H, 2H, etc.
+            scheduled_at = fixture.get("scheduled_at", "")
+
+            # Extract time (HH:MM)
+            time_part = ""
+            if scheduled_at and "T" in scheduled_at:
+                time_part = scheduled_at.split("T")[1][:5]
+
+            # Get odds
+            h_odds = fixture.get("best_home_odds")
+            d_odds = fixture.get("best_draw_odds")
+            a_odds = fixture.get("best_away_odds")
+
+            # Get results (for finished matches)
+            home_score = fixture.get("home_score")
+            away_score = fixture.get("away_score")
+
+            # Abbreviate league name for compact display
+            league_abbrev = self._abbreviate_league(league)
+
+            # Format based on status
+            if status == "FT" and home_score is not None and away_score is not None:
+                # Finished match with result
+                line = f"✅ {home} {home_score}-{away_score} {away}"
+                if league_abbrev:
+                    line += f" ({league_abbrev})"
+            elif status in ("1H", "2H", "HT", "LIVE"):
+                # Live match
+                minute = fixture.get("elapsed", "")
+                score_str = ""
+                if home_score is not None and away_score is not None:
+                    score_str = f" {home_score}-{away_score}"
+                line = f"🔴{score_str} {home} v {away}"
+                if minute:
+                    line += f" {minute}'"
+                if league_abbrev:
+                    line += f" ({league_abbrev})"
+            else:
+                # Scheduled match (NS, TBD, etc.)
+                line = f"⚽ {time_part} {home} v {away}"
+                if league_abbrev:
+                    line += f" ({league_abbrev})"
+                # Add odds if available
+                if h_odds and d_odds and a_odds:
+                    line += f" - {h_odds:.2f}/{d_odds:.2f}/{a_odds:.2f}"
+
+            lines.append(line)
+
+        # Join all lines
+        full_message = header + "\n".join(lines)
+
+        # Check if pagination needed
+        if len(full_message) <= max_length:
+            return full_message
+
+        # Pagination needed - split into chunks
+        return self._paginate_message(header, lines, max_length, count)
+
+    def _abbreviate_league(self, league: str) -> str:
+        """Abbreviate common league names for compact display."""
+        abbrev_map = {
+            "Premier League": "PL",
+            "UEFA Champions League": "UCL",
+            "UEFA Europa League": "UEL",
+            "UEFA Conference League": "UECL",
+            "La Liga": "LaLiga",
+            "Serie A": "Serie A",
+            "Bundesliga": "BuLi",
+            "Ligue 1": "L1",
+            "Eredivisie": "Eredivisie",
+            "Championship": "Champ",
+        }
+        return abbrev_map.get(league, league[:20])  # Max 20 chars for unknown leagues
+
+    def _paginate_message(
+        self,
+        header: str,
+        lines: list[str],
+        max_length: int,
+        total_count: int,
+    ) -> str:
+        """Split fixtures into multiple pages automatically.
+
+        Returns all pages separated by special marker that daemon will split and send separately.
+        Uses [PAGE_BREAK] marker to indicate message boundaries.
+        """
+        pages = []
+        page_lines = []
+        current_length = len(header)
+
+        for i, line in enumerate(lines):
+            line_length = len(line) + 1  # +1 for newline
+
+            # Check if adding this line would exceed limit
+            if current_length + line_length > (max_length - 150):  # Reserve for page footer
+                # Save current page
+                page_num = len(pages) + 1
+                footer = f"\n\n📄 Page {page_num}/{((total_count - 1) // len(page_lines)) + 1}"
+                pages.append(header + "\n".join(page_lines) + footer)
+
+                # Start new page
+                page_lines = [line]
+                current_length = len(header) + line_length
+            else:
+                page_lines.append(line)
+                current_length += line_length
+
+        # Add last page
+        if page_lines:
+            page_num = len(pages) + 1
+            estimated_total_pages = ((total_count - 1) // max(len(lines) // max(1, len(pages)), 1)) + 1
+            footer = f"\n\n📄 Page {page_num}"
+            if len(pages) > 0:  # Multiple pages
+                footer += f"/{estimated_total_pages}"
+            pages.append(header + "\n".join(page_lines) + footer)
+
+        # Join pages with special marker for daemon to split
+        return "[PAGE_BREAK]".join(pages)
+
     async def _handle_show_fixtures(
         self,
         intent: RequestIntent,
@@ -1175,69 +1361,13 @@ class MainOrchestrator:
                     "error": None,
                 }
 
-            # Format fixture listings for WhatsApp
-            lines = [f"📅 Upcoming Fixtures ({count} matches):\n"]
-
-            # Group fixtures by date
-            from collections import defaultdict
-            fixtures_by_date = defaultdict(list)
-
-            for fixture in fixtures[:50]:  # Limit to 50 fixtures for WhatsApp
-                scheduled_at = fixture.get("scheduled_at", "")
-                if scheduled_at:
-                    # Extract just the date part (YYYY-MM-DD)
-                    date_part = scheduled_at.split("T")[0] if "T" in scheduled_at else scheduled_at[:10]
-                    fixtures_by_date[date_part].append(fixture)
-
-            # Format each date group
-            for date_str, date_fixtures in sorted(fixtures_by_date.items())[:5]:  # Max 5 days
-                # Parse date for display
-                try:
-                    date_obj = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-                    date_display = date_obj.strftime("%a, %b %d")
-                except:
-                    date_display = date_str
-
-                lines.append(f"\n📆 {date_display}:")
-
-                for fixture in date_fixtures[:50]:  # Max 50 matches per day
-                    home_team = fixture.get("home_team", "Unknown")
-                    away_team = fixture.get("away_team", "Unknown")
-                    league = fixture.get("league", "")
-                    time_part = fixture.get("scheduled_at", "").split("T")[1][:5] if "T" in fixture.get("scheduled_at", "") else ""
-
-                    # Odds data (from Data MCP LEFT JOIN with odds table)
-                    best_home_odds = fixture.get("best_home_odds")
-                    best_draw_odds = fixture.get("best_draw_odds")
-                    best_away_odds = fixture.get("best_away_odds")
-                    bookmakers_count = fixture.get("bookmakers_count", 0)
-
-                    # Format: "⚽ 15:00 Arsenal vs Chelsea [Premier League]"
-                    if time_part:
-                        lines.append(f"  ⚽ {time_part} {home_team} vs {away_team}")
-                    else:
-                        lines.append(f"  ⚽ {home_team} vs {away_team}")
-
-                    if league:
-                        lines.append(f"     📍 {league}")
-
-                    # Show odds if available
-                    if best_home_odds and best_draw_odds and best_away_odds:
-                        lines.append(f"     💰 Odds: {best_home_odds:.2f} / {best_draw_odds:.2f} / {best_away_odds:.2f}")
-
-            if count > 50:
-                lines.append(f"\n... and {count - 50} more fixtures")
-
-            # Add filter information
-            if filters_applied:
-                lines.append("\n")
-                if filters_applied.get("leagues"):
-                    lines.append(f"🔍 Filtered by: {', '.join(filters_applied['leagues'])}")
-                if filters_applied.get("date_range"):
-                    date_range = filters_applied["date_range"]
-                    lines.append(f"📅 Date range: {date_range.get('from')} to {date_range.get('to')}")
-
-            message = "\n".join(lines)
+            # Format fixture listings for WhatsApp (condensed format with pagination)
+            message = self._format_fixtures_with_pagination(
+                fixtures=fixtures,
+                count=count,
+                filters_applied=filters_applied,
+                params=params
+            )
 
             return {
                 "message": message,

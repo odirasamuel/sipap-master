@@ -229,12 +229,15 @@ async def send_whatsapp_response(
 ) -> bool:
     """Send WhatsApp response via Twilio API.
 
+    Supports automatic pagination - if response contains [PAGE_BREAK] markers,
+    splits into multiple messages and sends sequentially with 2-second delays.
+
     Supports dry-run mode via ENABLE_WHATSAPP_DELIVERY environment variable.
     When disabled, logs the message instead of sending it.
 
     Args:
         phone: User phone number (E.164 format)
-        response: Response dict with response_text
+        response: Response dict with response_text (may contain [PAGE_BREAK] markers)
         twilio_client: Initialized Twilio WhatsApp client (None if disabled)
 
     Returns:
@@ -243,42 +246,56 @@ async def send_whatsapp_response(
     Example:
         >>> success = await send_whatsapp_response(
         ...     phone="+1234567890",
-        ...     response={"response_text": "Hello!"},
+        ...     response={"response_text": "Page 1[PAGE_BREAK]Page 2"},
         ...     twilio_client=client
         ... )
     """
     # Check if WhatsApp delivery is enabled
     enable_delivery = os.getenv("ENABLE_WHATSAPP_DELIVERY", "false").lower() == "true"
 
+    # Split response into pages if pagination marker present
+    response_text = response["response_text"]
+    pages = response_text.split("[PAGE_BREAK]") if "[PAGE_BREAK]" in response_text else [response_text]
+
     if not enable_delivery or twilio_client is None:
         # Dry-run mode: Log message instead of sending
-        logger.info(
-            "📱 [DRY-RUN] WhatsApp message would be sent (delivery disabled)",
-            extra={
-                "phone": phone,
-                "response_length": len(response["response_text"]),
-                "preview": response["response_text"][:200] + "..." if len(response["response_text"]) > 200 else response["response_text"]
-            }
-        )
-        logger.info(f"📱 [DRY-RUN] Full message to {phone}:\n{response['response_text']}")
+        for i, page in enumerate(pages, 1):
+            logger.info(
+                f"📱 [DRY-RUN] WhatsApp message {i}/{len(pages)} would be sent (delivery disabled)",
+                extra={
+                    "phone": phone,
+                    "page": i,
+                    "total_pages": len(pages),
+                    "response_length": len(page),
+                    "preview": page[:200] + "..." if len(page) > 200 else page
+                }
+            )
+            logger.info(f"📱 [DRY-RUN] Full message {i}/{len(pages)} to {phone}:\n{page}")
         return True
 
     # Production mode: Send via Twilio
     try:
-        message_sid = await twilio_client.send_message_with_retry(
-            to_phone=phone,
-            message_text=response["response_text"],
-            max_retries=3
-        )
+        for i, page in enumerate(pages, 1):
+            message_sid = await twilio_client.send_message_with_retry(
+                to_phone=phone,
+                message_text=page,
+                max_retries=3
+            )
 
-        logger.info(
-            "WhatsApp response sent successfully",
-            extra={
-                "phone": phone,
-                "message_sid": message_sid,
-                "response_length": len(response["response_text"])
-            }
-        )
+            logger.info(
+                f"WhatsApp response {i}/{len(pages)} sent successfully",
+                extra={
+                    "phone": phone,
+                    "page": i,
+                    "total_pages": len(pages),
+                    "message_sid": message_sid,
+                    "response_length": len(page)
+                }
+            )
+
+            # Add delay between messages to avoid rate limiting (except for last message)
+            if i < len(pages):
+                await asyncio.sleep(2)  # 2-second delay between messages
 
         return True
 
