@@ -433,27 +433,17 @@ class NLUAgent:
             quality_threshold = "high"
             entities["quality_terms"] = ["best possible", "good chance", "success"]
 
-        # Extract leagues
-        leagues = []
-        league_patterns = {
-            "Premier League": ["premier league", "epl", "english"],
-            "LaLiga": ["laliga", "la liga", "spanish"],
-            "Bundesliga": ["bundesliga", "german"],
-            "Serie A": ["serie a", "italian"],
-            "Ligue 1": ["ligue 1", "french"],
-            "Eredivisie": ["eredivisie", "netherlands", "dutch"],
-            "Liga Portugal": ["liga portugal", "portuguese"],
-            "Scottish Premiership": ["scottish", "scotish"],
-            "Super Lig": ["super lig", "turkish", "turkey"],
-            "Belgian Pro League": ["belgian", "belgium"],
-        }
+        # Extract leagues using comprehensive mappings (380 competitions)
+        from sipap.config.league_mappings import find_league_matches
 
-        for league_name, patterns in league_patterns.items():
-            if any(pattern in message_lower for pattern in patterns):
-                leagues.append(league_name)
+        leagues = find_league_matches(message)
 
         if leagues:
             entities["leagues"] = leagues
+            self.logger.debug(
+                f"Matched leagues: {leagues}",
+                extra={"query": message[:50], "leagues": leagues}
+            )
 
         # NOTE: Markets are NOT extracted from user messages
         # Users don't specify markets - they only express intent and quality requirements.

@@ -1277,28 +1277,19 @@ class MainOrchestrator:
             entities = intent.extracted_entities or {}
 
             # Map country names to league names
-            country_to_leagues = {
-                "sweden": ["Allsvenskan", "Superettan"],
-                "england": ["Premier League", "Championship", "League One", "League Two"],
-                "spain": ["LaLiga", "LaLiga2"],
-                "germany": ["Bundesliga", "2. Bundesliga"],
-                "italy": ["Serie A", "Serie B"],
-                "france": ["Ligue 1", "Ligue 2"],
-            }
+            # Use comprehensive league mappings (380 competitions)
+            from sipap.config.league_mappings import find_league_matches
 
-            # Check if country mentioned in original query
-            original_query_lower = intent.original_query.lower()
-            matched_country = None
-            for country, leagues in country_to_leagues.items():
-                if country in original_query_lower:
-                    league_names.extend(leagues)
-                    matched_country = country
-                    self.logger.debug(f"Matched country '{country}' → leagues: {leagues}")
-                    break
+            # Find league matches from user query (country names, competition aliases, etc.)
+            matched_leagues = find_league_matches(intent.original_query)
 
-            if league_names:
+            if matched_leagues:
+                league_names.extend(matched_leagues)
                 params["league_names"] = league_names
-                self.logger.info(f"Filtering by leagues: {league_names}")
+                self.logger.info(
+                    f"Matched leagues from query: {matched_leagues}",
+                    extra={"query": intent.original_query, "matched": matched_leagues}
+                )
             else:
                 self.logger.debug("No league filter applied, querying all leagues")
 
