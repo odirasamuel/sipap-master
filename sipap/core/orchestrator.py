@@ -7,6 +7,7 @@ to sport-specific orchestrators (SoccerOrchestrator, BasketballOrchestrator, etc
 """
 
 import logging
+import os
 from typing import Any
 
 from sipap.conversation import ConversationManager, NLUAgent, RequestIntent
@@ -51,7 +52,9 @@ class MainOrchestrator:
         self.conversation_manager = ConversationManager(logger=self.logger)
 
         # Initialize NLU agent for natural language understanding
-        self.nlu_agent = NLUAgent(logger=self.logger)
+        # Claude-powered clarifications can be enabled via ENABLE_CLAUDE_NLU env var
+        use_claude_nlu = os.getenv("ENABLE_CLAUDE_NLU", "true").lower() == "true"
+        self.nlu_agent = NLUAgent(logger=self.logger, use_claude=use_claude_nlu)
 
         # Initialize MCP factory for data aggregation
         self.mcp_factory = MCPFactory(logger=self.logger)
