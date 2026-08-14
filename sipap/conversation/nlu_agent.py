@@ -295,10 +295,8 @@ class NLUAgent:
         """
         Parse message with Claude NLU agent.
 
-        This method will use Strands Agents framework with Claude 3.5 Sonnet
-        to parse the message into structured RequestIntent output.
-
-        The system prompt is loaded from sipap/sports/soccer/agents/nlu.yml
+        Uses Claude Sonnet 4.5 via AWS Bedrock to parse user messages into
+        structured RequestIntent with intelligent entity extraction.
 
         Args:
             message: User query string
@@ -306,17 +304,30 @@ class NLUAgent:
 
         Returns:
             RequestIntent with parsed intent and entities
-
-        Note:
-            This is a placeholder implementation. Full Claude integration will be
-            added once nlu.yml system prompt is complete.
         """
-        # TODO: Implement Claude agent integration with Strands
-        # For now, return low confidence to trigger regex fallback during tests
-        self.logger.debug("Claude parsing not yet implemented, using regex fallback")
+        # Lazy initialize Claude client
+        if self._claude_agent is None and self.use_claude:
+            try:
+                from sipap.conversation.claude_nlu import ClaudeNLUClient
+                self._claude_agent = ClaudeNLUClient()
+            except Exception as e:
+                self.logger.error(f"Failed to initialize Claude NLU client: {e}")
+                self.use_claude = False
+                return await self._parse_with_basic_heuristics(message, context)
 
-        # Placeholder: Parse basic patterns until Claude is integrated
-        return await self._parse_with_basic_heuristics(message, context)
+        if not self.use_claude or self._claude_agent is None:
+            return await self._parse_with_basic_heuristics(message, context)
+
+        try:
+            # Call Claude to parse intent
+            intent_data = await self._invoke_claude_for_intent(message, context)
+
+            # Build RequestIntent from Claude's response
+            return self._build_intent_from_claude_response(intent_data, message)
+
+        except Exception as e:
+            self.logger.error(f"Claude intent parsing failed: {e}, falling back to heuristics")
+            return await self._parse_with_basic_heuristics(message, context)
 
     async def _parse_with_basic_heuristics(
         self,
@@ -822,6 +833,177 @@ class NLUAgent:
             })
 
         return leagues_data
+
+    async def _invoke_claude_for_intent(
+        self,
+        message: str,
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Invoke Claude to extract structured intent from user message.
+
+        Args:
+            message: User's natural language query
+            context: Conversation context
+
+        Returns:
+            Dictionary with intent data from Claude
+
+        Example Claude response:
+            {
+                "intent_type": "get_match_results",
+                "confidence": 0.9,
+                "leagues": ["UEFA Europa League"],
+                "date_range": {"start": "2026-08-14", "end": "2026-08-14"},
+                "reasoning": "User wants match results for Europa League today"
+            }
+        """
+        import json
+
+        system_prompt = """You are SIPAP's NLU system - an AI-powered sports intelligence platform.
+Your job is to parse user queries into structured intents for sports betting intelligence.
+
+INTENT TYPES:
+- "batch_prediction": User wants betting predictions for multiple matches (e.g., "I need 20 odds", "Give me 5 good bets")
+- "single_prediction": User wants prediction for ONE specific match (e.g., "Arsenal vs Chelsea prediction")
+- "get_match_results": User wants actual match scores/results (e.g., "LaLiga results today", "Europa League matches played")
+- "show_fixtures": User wants to SEE available matches without predictions (e.g., "Show me LaLiga fixtures today")
+- "track_results": User asking about OUR past predictions performance (e.g., "How did your predictions do?")
+- "check_odds": User wants to check odds (e.g., "What are the odds for this match?")
+- "explain": User wants explanation of a prediction (e.g., "Why did you predict...?")
+- "unknown": Cannot determine intent
+
+KEY DISTINCTIONS:
+- "matches played", "results", "scores", "what happened" = get_match_results
+- "matches today", "fixtures", "games available", "show me matches" = show_fixtures
+- "predictions", "bets", "tips", "odds accumulation" = batch_prediction or single_prediction
+- Queries with "played", "happened", "final score" are ALWAYS get_match_results
+
+ENTITY EXTRACTION:
+- leagues: Extract league names (e.g., "LaLiga", "Europa League", "Premier League")
+- date_range: Extract dates (today = current date, tomorrow = next day, etc.)
+- teams: Extract team names if mentioned
+- target_odds: Extract numbers when user says "X odds" or "X matches"
+
+IMPORTANT:
+- "Firstly" is just a discourse marker - ignore it, focus on the actual intent
+- "Show me X results" = get_match_results (they want scores)
+- "Show me X fixtures" = show_fixtures (they want available matches)
+- Confidence: 0.9+ for clear queries, 0.7-0.9 for somewhat clear, <0.7 for unclear
+
+Return ONLY valid JSON, no extra text."""
+
+        user_prompt = f"""Parse this user query into structured intent:
+
+USER QUERY: "{message}"
+
+Return JSON format:
+{{
+    "intent_type": "get_match_results|show_fixtures|batch_prediction|single_prediction|track_results|check_odds|explain|unknown",
+    "confidence": 0.0-1.0,
+    "leagues": ["league1", "league2"],
+    "teams": {{"home": "team1", "away": "team2"}},
+    "date_range": {{"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}},
+    "target_odds": null or number,
+    "reasoning": "brief explanation"
+}}"""
+
+        # Invoke Claude via Bedrock
+        try:
+            response = self._claude_agent.bedrock.invoke_model(
+                modelId=self._claude_agent.model_id,
+                body=json.dumps({
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 500,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": user_prompt
+                        }
+                    ],
+                    "system": system_prompt,
+                    "temperature": 0.3,  # Lower temperature for more consistent parsing
+                })
+            )
+
+            # Parse response
+            response_body = json.loads(response["body"].read())
+            content = response_body["content"][0]["text"]
+
+            # Extract JSON from Claude's response (may have markdown)
+            import re
+            json_match = re.search(r'\{[\s\S]*\}', content)
+            if json_match:
+                intent_data = json.loads(json_match.group(0))
+                return intent_data
+            else:
+                raise ValueError("No JSON found in Claude response")
+
+        except Exception as e:
+            self.logger.error(f"Claude invocation failed: {e}")
+            raise
+
+    def _build_intent_from_claude_response(
+        self,
+        intent_data: dict[str, Any],
+        original_query: str,
+    ) -> RequestIntent:
+        """
+        Build RequestIntent from Claude's structured response.
+
+        Args:
+            intent_data: Parsed JSON from Claude
+            original_query: Original user message
+
+        Returns:
+            RequestIntent object
+        """
+        from datetime import UTC, datetime
+
+        # Extract intent type and confidence
+        intent_type = intent_data.get("intent_type", "unknown")
+        confidence = float(intent_data.get("confidence", 0.5))
+
+        # Extract leagues with structured data
+        leagues = intent_data.get("leagues", [])
+        leagues_data = self._extract_leagues_with_context(original_query) if leagues else []
+
+        # Extract teams
+        teams = intent_data.get("teams", {})
+        home_team = teams.get("home")
+        away_team = teams.get("away")
+
+        # Extract date range
+        date_range = intent_data.get("date_range")
+        if not date_range and intent_type in ["get_match_results", "show_fixtures"]:
+            # Default to today
+            today = datetime.now(UTC).date().isoformat()
+            date_range = {"start": today, "end": today}
+
+        # Extract target odds
+        target_odds = intent_data.get("target_odds")
+
+        # Build entities dict
+        entities = {
+            "leagues": leagues,
+            "leagues_data": leagues_data,
+            "teams": teams,
+            "date_range": date_range,
+            "target_odds": target_odds,
+            "claude_reasoning": intent_data.get("reasoning", "")
+        }
+
+        return RequestIntent(
+            intent_type=intent_type,  # type: ignore[arg-type]
+            confidence=confidence,
+            leagues=leagues if leagues else None,
+            date_range=date_range,
+            home_team=home_team,
+            away_team=away_team,
+            target_odds=target_odds,
+            original_query=original_query,
+            extracted_entities=entities,
+        )
 
     def _convert_regex_to_request_intent(
         self,
