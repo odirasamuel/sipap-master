@@ -958,8 +958,13 @@ class MainOrchestrator:
         """
         Handle match results request (live or finished matches).
 
-        Calls Intelligence MCP's get_match_results tool to fetch real-time
-        match scores and status from API-Football.
+        Database-First Strategy with API-Football Fallback:
+        1. For LIVE matches → Always use Intelligence MCP (API-Football real-time)
+        2. For finished matches → Try Data MCP (database) first, fallback to Intelligence MCP
+        3. For "ALL" status → Combine database finished + API live matches
+
+        This ensures we use cached historical data when available, saving API quota
+        and providing faster responses, while maintaining real-time accuracy for live matches.
 
         Args:
             intent: Parsed user intent with filters (date, league, team, status)
@@ -968,39 +973,135 @@ class MainOrchestrator:
         Returns:
             Response dictionary with match results
         """
-        from datetime import UTC, datetime
+        from datetime import UTC, datetime, timedelta
 
         try:
-            # Get Intelligence MCP client
-            intelligence_mcp = self.mcp_factory.create("intelligence")
-
-            # Prepare parameters for get_match_results tool
+            # Prepare common parameters
             params: dict[str, Any] = {}
 
             # Determine date (default to today)
             if intent.date_range:
-                params["date"] = intent.date_range.get("start")
+                date_start = intent.date_range.get("start")
+                date_end = intent.date_range.get("end", date_start)
             else:
-                params["date"] = datetime.now(UTC).date().isoformat()
+                today = datetime.now(UTC).date().isoformat()
+                date_start = today
+                date_end = today
+
+            params["date"] = date_start
 
             # Add league filter if provided
+            league_names = None
             if intent.leagues and len(intent.leagues) > 0:
+                league_names = intent.leagues
                 params["league_name"] = intent.leagues[0]
 
             # Add team filter if provided
+            team_name = None
             if intent.home_team:
+                team_name = intent.home_team
                 params["team_name"] = intent.home_team
             elif intent.away_team:
+                team_name = intent.away_team
                 params["team_name"] = intent.away_team
 
             # Determine status (live vs finished)
-            # If user says "live", "happening now" -> status = "LIVE"
-            # If user says "results", "scores" -> status = "FT"
-            # Default to "ALL" to show both
-            params["status"] = "ALL"  # Show both live and finished by default
+            # Default to "FT" for results queries (most common case)
+            status = "FT"  # Default: finished matches
 
-            # Call Intelligence MCP tool
-            result = await intelligence_mcp.call_tool("get_match_results", params)
+            # STRATEGY: Database-first for historical data, API-Football for live data
+            matches = []
+            data_source = "unknown"
+
+            # Step 1: Try database first for finished matches (historical data)
+            if status in ["FT", "AET", "PEN", "ALL"]:
+                self.logger.info(
+                    f"Attempting database lookup for finished matches: date={date_start}, "
+                    f"leagues={league_names}, team={team_name}"
+                )
+
+                try:
+                    # Get Data MCP client
+                    data_mcp = self.mcp_factory.create("data")
+
+                    # Query database for finished matches
+                    db_params: dict[str, Any] = {
+                        "date_from": date_start,
+                        "date_to": date_end,
+                        "status": "finished",
+                        "has_odds": False,  # Don't filter by odds for results queries
+                        "limit": 100,
+                    }
+
+                    if league_names:
+                        db_params["league_names"] = league_names
+
+                    # Call Data MCP's search_fixtures tool
+                    db_result = await data_mcp.call_tool("search_fixtures", db_params)
+                    db_fixtures = db_result.get("fixtures", [])
+
+                    # Filter by team name if provided (database query doesn't support team filter yet)
+                    if team_name and db_fixtures:
+                        team_lower = team_name.lower()
+                        db_fixtures = [
+                            f for f in db_fixtures
+                            if (team_lower in f.get("home_team", "").lower()
+                                or team_lower in f.get("away_team", "").lower())
+                        ]
+
+                    # Check if database has results with scores
+                    finished_matches_with_scores = [
+                        f for f in db_fixtures
+                        if f.get("home_score") is not None and f.get("away_score") is not None
+                    ]
+
+                    if finished_matches_with_scores:
+                        self.logger.info(
+                            f"Database hit: Found {len(finished_matches_with_scores)} finished matches with scores"
+                        )
+                        matches.extend(self._convert_db_fixtures_to_api_format(finished_matches_with_scores))
+                        data_source = "database"
+                    else:
+                        self.logger.info(
+                            f"Database miss: No finished matches with scores found (total fixtures: {len(db_fixtures)})"
+                        )
+
+                except Exception as e:
+                    self.logger.warning(
+                        f"Database lookup failed, will fallback to API-Football: {e}"
+                    )
+
+            # Step 2: Fallback to API-Football if no database results or for live matches
+            if not matches or status == "LIVE":
+                self.logger.info(
+                    f"Using API-Football fallback (live data or database miss): status={status}"
+                )
+
+                # Get Intelligence MCP client
+                intelligence_mcp = self.mcp_factory.create("intelligence")
+
+                # Use original params with status
+                params["status"] = status
+
+                # Call Intelligence MCP tool (API-Football real-time)
+                api_result = await intelligence_mcp.call_tool("get_match_results", params)
+                api_matches = api_result.get("matches", [])
+
+                if api_matches:
+                    self.logger.info(f"API-Football returned {len(api_matches)} matches")
+                    matches.extend(api_matches)
+                    data_source = "api-football" if not matches else "hybrid"
+
+            # Build combined result
+            result = {
+                "matches": matches,
+                "count": len(matches),
+                "date": date_start,
+                "status_filter": status,
+                "league_filter": league_names[0] if league_names else None,
+                "team_filter": team_name,
+                "data_source": data_source,
+            }
 
             # Extract matches from result
             matches = result.get("matches", [])
@@ -1066,6 +1167,82 @@ class MainOrchestrator:
                 "data": None,
                 "error": str(e),
             }
+
+    def _convert_db_fixtures_to_api_format(
+        self,
+        db_fixtures: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Convert Data MCP fixture format to API-Football format.
+
+        Ensures compatibility between database fixtures and API-Football fixtures
+        so the same formatting code can handle both sources.
+
+        Args:
+            db_fixtures: Fixtures from Data MCP (database format)
+
+        Returns:
+            Fixtures in API-Football format
+        """
+        api_format_fixtures = []
+
+        for fixture in db_fixtures:
+            # Convert database fixture to API-Football structure
+            api_fixture = {
+                "fixture": {
+                    "id": fixture.get("id"),
+                    "date": fixture.get("scheduled_at"),
+                    "status": {
+                        "short": "FT",  # Database only has finished matches
+                        "long": "Match Finished",
+                    },
+                    "venue": fixture.get("metadata", {}).get("venue", {}),
+                    "referee": fixture.get("metadata", {}).get("referee"),
+                },
+                "league": {
+                    "id": fixture.get("league_id"),
+                    "name": fixture.get("league", "Unknown"),
+                    "country": fixture.get("metadata", {}).get("country", ""),
+                    "season": fixture.get("metadata", {}).get("season"),
+                },
+                "teams": {
+                    "home": {
+                        "id": fixture.get("home_team_id"),
+                        "name": fixture.get("home_team", "Unknown"),
+                        "logo": None,
+                    },
+                    "away": {
+                        "id": fixture.get("away_team_id"),
+                        "name": fixture.get("away_team", "Unknown"),
+                        "logo": None,
+                    },
+                },
+                "goals": {
+                    "home": fixture.get("home_score"),
+                    "away": fixture.get("away_score"),
+                },
+                "score": {
+                    "halftime": {
+                        "home": fixture.get("metadata", {}).get("halftime_home_score"),
+                        "away": fixture.get("metadata", {}).get("halftime_away_score"),
+                    },
+                    "fulltime": {
+                        "home": fixture.get("home_score"),
+                        "away": fixture.get("away_score"),
+                    },
+                    "extratime": {
+                        "home": None,
+                        "away": None,
+                    },
+                    "penalty": {
+                        "home": None,
+                        "away": None,
+                    },
+                },
+            }
+
+            api_format_fixtures.append(api_fixture)
+
+        return api_format_fixtures
 
     def _format_fixtures_with_pagination(
         self,
