@@ -495,10 +495,12 @@ class NLUAgent:
         # Extract leagues using comprehensive mappings (380 competitions) from sipap-common
         # NEW: Extract structured league data with country context and competition type
         leagues_data = self._extract_leagues_with_context(message)
+        leagues = None
 
         if leagues_data:
             # Store both canonical names (for backward compatibility) and full structured data
-            entities["leagues"] = [league["canonical_name"] for league in leagues_data]
+            leagues = [league["canonical_name"] for league in leagues_data]
+            entities["leagues"] = leagues
             entities["leagues_data"] = leagues_data  # NEW: Structured data
             self.logger.debug(
                 f"Matched leagues: {leagues_data}",
@@ -975,8 +977,15 @@ Return JSON format:
 
         # Extract date range
         date_range = intent_data.get("date_range")
+
+        # Check if date_range is valid (not None and has valid start/end)
+        if date_range:
+            # Ensure start and end are not None
+            if not date_range.get("start") or not date_range.get("end"):
+                date_range = None
+
+        # Default to today for intents that need dates
         if not date_range and intent_type in ["get_match_results", "show_fixtures"]:
-            # Default to today
             today = datetime.now(UTC).date().isoformat()
             date_range = {"start": today, "end": today}
 
