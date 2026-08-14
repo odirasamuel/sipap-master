@@ -1149,19 +1149,33 @@ class MainOrchestrator:
             # Format match results for WhatsApp with pagination
             # WhatsApp limit: 1600 chars per message
             # Paginate: 10 matches per page (safe limit for char count)
+            # MAX: 5 pages (50 matches) to prevent flooding on broad queries like "friendlies"
             pages = []
             page_size = 10
+            max_pages = 5
+            max_matches = page_size * max_pages  # 50 matches max
 
-            for page_num in range(0, count, page_size):
-                page_matches = matches[page_num:page_num + page_size]
+            # Limit matches to prevent flooding
+            display_matches = matches[:max_matches]
+            display_count = len(display_matches)
+            truncated = count > max_matches
+
+            for page_num in range(0, display_count, page_size):
+                page_matches = display_matches[page_num:page_num + page_size]
                 page_index = page_num // page_size + 1
-                total_pages = (count + page_size - 1) // page_size
+                total_pages = (display_count + page_size - 1) // page_size
 
                 # Page header
                 if total_pages > 1:
-                    lines = [f"📊 Match Results (Page {page_index}/{total_pages}):\n"]
+                    if truncated:
+                        lines = [f"📊 Match Results (Page {page_index}/{total_pages}, showing first {max_matches} of {count}):\n"]
+                    else:
+                        lines = [f"📊 Match Results (Page {page_index}/{total_pages}):\n"]
                 else:
-                    lines = [f"📊 Match Results ({count} matches):\n"]
+                    if truncated:
+                        lines = [f"📊 Match Results (showing first {max_matches} of {count}):\n"]
+                    else:
+                        lines = [f"📊 Match Results ({count} matches):\n"]
 
                 # Format matches for this page
                 for match in page_matches:
@@ -1189,6 +1203,17 @@ class MainOrchestrator:
                     lines.append(f"{status_emoji} {score_display} [{league_name}]")
 
                 pages.append("\n".join(lines))
+
+            # Add truncation notice if results were limited
+            if truncated:
+                truncation_notice = (
+                    f"\n⚠️ Showing first {max_matches} of {count} matches.\n\n"
+                    f"💡 Tip: Be more specific to see exact matches:\n"
+                    f"• Specify a league (e.g., 'Champions League results')\n"
+                    f"• Specify a team (e.g., 'Arsenal results today')\n"
+                    f"• Specify a country (e.g., 'England results today')"
+                )
+                pages.append(truncation_notice)
 
             # Join pages with PAGE_BREAK marker for automatic pagination
             # daemon.send_whatsapp_response() will split and send separately
