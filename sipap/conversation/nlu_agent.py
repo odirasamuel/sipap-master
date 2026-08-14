@@ -346,16 +346,37 @@ class NLUAgent:
             "fixture", "fixtures", "bet", "betting", "accumulator", "parlay",
             "selection", "selections", "game", "games", "vs", "against",
             "team", "teams", "league", "leagues", "soccer", "football",
-            "basketball", "tennis", "sport", "sports"
+            "basketball", "tennis", "sport", "sports", "score", "scores",
+            "result", "results"  # Match results queries
         ]
         has_sports_context = any(keyword in message_lower for keyword in sports_keywords)
 
         # Detect intent type (order matters - check most specific first)
-        if any(term in message_lower for term in ["update", "result", "how did", "what happened", "wrong"]):
-            # Track results if asking about past predictions
-            if any(term in message_lower for term in ["your", "suggested", "selections", "picks", "wrong"]):
+
+        # Check for match results queries (scores, results of finished/live matches)
+        results_keywords = ["score", "scores", "result", "results", "outcome", "outcomes", "final score"]
+        time_indicators = ["yesterday", "today", "last", "previous", "finished", "ended", "final"]
+        has_results_request = any(keyword in message_lower for keyword in results_keywords)
+        has_time_indicator = any(indicator in message_lower for indicator in time_indicators)
+
+        # Patterns that strongly indicate get_match_results intent:
+        # - "What was the result/score in/of X"
+        # - "Show me X results/scores"
+        # - "X results yesterday/today/last week"
+        # - "How did X do"
+        # - "Did X win"
+        if has_results_request or has_time_indicator or "how did" in message_lower or "did.*win" in message_lower:
+            # Distinguish between:
+            # 1. get_match_results: "Show me Arsenal results" (actual match scores)
+            # 2. track_results: "How did your predictions do" (tracking our past predictions)
+            if any(term in message_lower for term in ["your", "suggested", "selections", "picks", "prediction"]) and not has_results_request:
+                # User asking about OUR predictions (track_results)
                 intent_type = "track_results"
                 confidence = 0.8
+            elif has_results_request or has_time_indicator or "how did" in message_lower:
+                # User asking about actual match results (get_match_results)
+                intent_type = "get_match_results"
+                confidence = 0.8 if has_sports_context else 0.6
             else:
                 intent_type = "unknown"
                 confidence = 0.5
@@ -490,7 +511,14 @@ class NLUAgent:
         date_range = None
         today = datetime.now(UTC).date()
 
-        if "today" in message_lower:
+        if "yesterday" in message_lower:
+            yesterday = today - timedelta(days=1)
+            date_range = {
+                "start": yesterday.isoformat(),
+                "end": yesterday.isoformat(),
+            }
+            entities["date"] = "yesterday"
+        elif "today" in message_lower:
             date_range = {
                 "start": today.isoformat(),
                 "end": today.isoformat(),
@@ -529,6 +557,7 @@ class NLUAgent:
 
         # Extract relative durations (e.g., "next 2 weeks", "next 7 days", "2 weeks")
         if not date_range:
+            # Forward-looking patterns (next X weeks/days)
             # Pattern: "next X weeks" or "X weeks"
             weeks_match = re.search(r"(?:next\s+)?(\d+)\s+weeks?", message_lower)
             if weeks_match:
@@ -551,6 +580,29 @@ class NLUAgent:
                         "end": end_date.isoformat(),
                     }
                     entities["date"] = f"next {num_days} day{'s' if num_days > 1 else ''}"
+
+            # Backward-looking patterns (last X weeks/days) for historical match results
+            if not date_range:
+                # Pattern: "last week" or "past week"
+                if "last week" in message_lower or "past week" in message_lower:
+                    start_of_last_week = today - timedelta(days=7)
+                    date_range = {
+                        "start": start_of_last_week.isoformat(),
+                        "end": today.isoformat(),
+                    }
+                    entities["date"] = "last week"
+
+                # Pattern: "last X days" or "past X days"
+                elif not date_range:
+                    last_days_match = re.search(r"(?:last|past)\s+(\d+)\s+days?", message_lower)
+                    if last_days_match:
+                        num_days = int(last_days_match.group(1))
+                        start_date = today - timedelta(days=num_days)
+                        date_range = {
+                            "start": start_date.isoformat(),
+                            "end": today.isoformat(),
+                        }
+                        entities["date"] = f"last {num_days} day{'s' if num_days > 1 else ''}"
 
         # Extract explicit date ranges (e.g., "3rd of August, 2026 to 10th of August, 2026")
         date_range_match = re.search(
