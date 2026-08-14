@@ -1007,10 +1007,20 @@ class MainOrchestrator:
             params["date"] = date_start
 
             # Add league filter if provided
+            # CRITICAL: Extract league phrase from original query, not canonical name
+            # This preserves country context: "Armenia Premier League" not just "Premier League"
             league_names = None
+            raw_league_phrase = None
             if intent.leagues and len(intent.leagues) > 0:
-                league_names = intent.leagues
-                params["league_name"] = intent.leagues[0]
+                league_names = intent.leagues  # For database query (canonical names)
+
+                # Extract raw league phrase from original message for API-Football
+                # This preserves country context like "Armenia", "Austria", etc.
+                raw_league_phrase = self._extract_league_phrase_from_query(
+                    intent.original_query,
+                    intent.leagues[0]
+                )
+                params["league_name"] = raw_league_phrase or intent.leagues[0]
 
             # Add team filter if provided
             team_name = None
@@ -1209,6 +1219,69 @@ class MainOrchestrator:
                 "data": None,
                 "error": None,  # Don't expose error to user
             }
+
+    def _extract_league_phrase_from_query(
+        self,
+        query: str,
+        canonical_league_name: str,
+    ) -> str | None:
+        """Extract the raw league phrase from user query preserving country context.
+
+        Problem: find_league_matches("Armenia Premier League") returns ["Premier League"]
+        which loses the "Armenia" context. This method extracts the original phrase.
+
+        Args:
+            query: Original user query (e.g., "What's Armenia Premier League results today?")
+            canonical_league_name: Canonical league name (e.g., "Premier League")
+
+        Returns:
+            Raw league phrase with country context (e.g., "Armenia Premier League")
+            or None if not found
+
+        Examples:
+            >>> _extract_league_phrase_from_query(
+            ...     "What's Armenia Premier League results today?",
+            ...     "Premier League"
+            ... )
+            "Armenia Premier League"
+
+            >>> _extract_league_phrase_from_query(
+            ...     "Can I get Austria league results?",
+            ...     "Bundesliga"
+            ... )
+            "Austria league"
+        """
+        import re
+
+        query_lower = query.lower()
+        canonical_lower = canonical_league_name.lower()
+
+        # Pattern 1: "[Country] [League]" (e.g., "Armenia Premier League")
+        # Find instances of canonical league name preceded by a word (likely country)
+        pattern1 = rf"(\w+\s+{re.escape(canonical_lower)}(?:\s+\w+)?)"
+        match1 = re.search(pattern1, query_lower)
+        if match1:
+            phrase = match1.group(1)
+            # Verify it's not just "the Premier League" or "what Premier League"
+            first_word = phrase.split()[0]
+            if first_word not in ["the", "what", "which", "show", "get", "find"]:
+                # Return with original casing from query
+                start_idx = match1.start(1)
+                end_idx = match1.end(1)
+                return query[start_idx:end_idx]
+
+        # Pattern 2: "[Country] league" (e.g., "Austria league" → should map to "Bundesliga")
+        # This handles cases where user says country name + "league"
+        pattern2 = r"(\w+)\s+league"
+        match2 = re.search(pattern2, query_lower)
+        if match2:
+            country_word = match2.group(1)
+            # Verify it's not generic words
+            if country_word not in ["the", "what", "which", "premier", "europa"]:
+                return match2.group(0)  # Return "Austria league"
+
+        # Fallback: return canonical name if no country context found
+        return None
 
     def _convert_db_fixtures_to_api_format(
         self,
