@@ -1007,20 +1007,38 @@ class MainOrchestrator:
             params["date"] = date_start
 
             # Add league filter if provided
-            # CRITICAL: Extract league phrase from original query, not canonical name
-            # This preserves country context: "Armenia Premier League" not just "Premier League"
+            # NEW: Use structured league data from NLU (canonical name + country context)
+            # No more regex workarounds - NLU provides clean structured data
             league_names = None
-            raw_league_phrase = None
+            league_with_country = None
             if intent.leagues and len(intent.leagues) > 0:
                 league_names = intent.leagues  # For database query (canonical names)
 
-                # Extract raw league phrase from original message for API-Football
-                # This preserves country context like "Armenia", "Austria", etc.
-                raw_league_phrase = self._extract_league_phrase_from_query(
-                    intent.original_query,
-                    intent.leagues[0]
-                )
-                params["league_name"] = raw_league_phrase or intent.leagues[0]
+                # Check if NLU provided structured league data (NEW architecture)
+                leagues_data = intent.extracted_entities.get("leagues_data", [])
+                if leagues_data and len(leagues_data) > 0:
+                    # Use structured data: canonical name + country context
+                    first_league = leagues_data[0]
+                    canonical = first_league["canonical_name"]
+                    country = first_league.get("country")
+
+                    # For Intelligence MCP: pass "Country CanonicalName" if country exists
+                    # This preserves context: "Wales Premier League" not just "Premier League"
+                    if country:
+                        league_with_country = f"{country} {canonical}"
+                    else:
+                        # International tournament (no country)
+                        league_with_country = canonical
+
+                    params["league_name"] = league_with_country
+                else:
+                    # Fallback: Old architecture (for backward compatibility during transition)
+                    # DEPRECATED: Remove after confirming NLU provides leagues_data
+                    raw_league_phrase = self._extract_league_phrase_from_query(
+                        intent.original_query,
+                        intent.leagues[0]
+                    )
+                    params["league_name"] = raw_league_phrase or intent.leagues[0]
 
             # Add team filter if provided
             team_name = None
