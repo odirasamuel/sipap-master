@@ -515,6 +515,42 @@ class NLUAgent:
                 "end": sunday.isoformat(),
             }
             entities["date"] = "this weekend"
+        elif "this week" in message_lower:
+            # This week = today until next Sunday
+            days_until_sunday = 6 - today.weekday()  # Sunday is 6
+            if days_until_sunday < 0:
+                days_until_sunday = 0  # Already Sunday
+            end_of_week = today + timedelta(days=days_until_sunday)
+            date_range = {
+                "start": today.isoformat(),
+                "end": end_of_week.isoformat(),
+            }
+            entities["date"] = "this week"
+
+        # Extract relative durations (e.g., "next 2 weeks", "next 7 days", "2 weeks")
+        if not date_range:
+            # Pattern: "next X weeks" or "X weeks"
+            weeks_match = re.search(r"(?:next\s+)?(\d+)\s+weeks?", message_lower)
+            if weeks_match:
+                num_weeks = int(weeks_match.group(1))
+                end_date = today + timedelta(weeks=num_weeks)
+                date_range = {
+                    "start": today.isoformat(),
+                    "end": end_date.isoformat(),
+                }
+                entities["date"] = f"next {num_weeks} week{'s' if num_weeks > 1 else ''}"
+
+            # Pattern: "next X days" or "X days"
+            if not date_range:
+                days_match = re.search(r"(?:next\s+)?(\d+)\s+days?", message_lower)
+                if days_match:
+                    num_days = int(days_match.group(1))
+                    end_date = today + timedelta(days=num_days)
+                    date_range = {
+                        "start": today.isoformat(),
+                        "end": end_date.isoformat(),
+                    }
+                    entities["date"] = f"next {num_days} day{'s' if num_days > 1 else ''}"
 
         # Extract explicit date ranges (e.g., "3rd of August, 2026 to 10th of August, 2026")
         date_range_match = re.search(
