@@ -568,7 +568,7 @@ class MainOrchestrator:
                 "message": clarification_message,
                 "intent": "unknown",
                 "data": None,
-                "error": f"NLU parsing error: {str(e)}",
+                "error": None,  # Don't expose technical errors to user
             }
             self.conversation_manager.add_assistant_message(user_id, response["message"])
             return response
@@ -854,15 +854,21 @@ class MainOrchestrator:
 
         except Exception as e:
             self.logger.error(f"Batch prediction failed: {e}", exc_info=True)
+
+            # NEVER expose raw errors to users - provide friendly message
+            friendly_message = (
+                "I'm having trouble generating predictions right now. "
+                "Please try again in a moment, or try:\n\n"
+                "• Being more specific about what you're looking for\n"
+                "• Checking fixtures first to see what's available\n"
+                "• Starting with a smaller batch (e.g., '5 odds' instead of '20')"
+            )
+
             return {
-                "message": (
-                    f"❌ Batch Prediction Failed\n\n"
-                    f"An unexpected error occurred: {str(e)}\n\n"
-                    f"Please try again or contact support."
-                ),
+                "message": friendly_message,
                 "intent": "batch_prediction",
                 "data": None,
-                "error": f"Batch prediction error: {str(e)}",
+                "error": None,  # Don't expose error to user
             }
 
     async def _handle_single_prediction(
@@ -943,11 +949,21 @@ class MainOrchestrator:
 
         except Exception as e:
             self.logger.error(f"Prediction failed: {e}", exc_info=True)
+
+            # NEVER expose raw errors to users - provide friendly message
+            friendly_message = (
+                "I'm having trouble generating predictions right now. "
+                "Please try again in a moment, or try:\n\n"
+                "• Checking if the match is scheduled (predictions need upcoming fixtures)\n"
+                "• Asking for batch predictions instead (e.g., '20 odds')\n"
+                "• Viewing available fixtures first"
+            )
+
             return {
-                "message": f"❌ Prediction error: {str(e)}",
+                "message": friendly_message,
                 "intent": "single_prediction",
                 "data": None,
-                "error": str(e),
+                "error": None,  # Don't expose error to user
             }
 
     async def _handle_get_match_results(
@@ -1161,11 +1177,21 @@ class MainOrchestrator:
 
         except Exception as e:
             self.logger.error(f"Get match results failed: {e}", exc_info=True)
+
+            # NEVER expose raw errors to users - provide friendly message
+            friendly_message = (
+                "I'm having trouble fetching match results right now. "
+                "Please try again in a moment, or try:\n\n"
+                "• Being more specific (e.g., 'Arsenal results yesterday')\n"
+                "• Checking a different league or date\n"
+                "• Asking for upcoming fixtures instead"
+            )
+
             return {
-                "message": f"❌ Error fetching match results: {str(e)}",
+                "message": friendly_message,
                 "intent": "get_match_results",
                 "data": None,
-                "error": str(e),
+                "error": None,  # Don't expose error to user
             }
 
     def _convert_db_fixtures_to_api_format(
@@ -1538,11 +1564,21 @@ class MainOrchestrator:
 
         except Exception as e:
             self.logger.error(f"Show fixtures failed: {e}", exc_info=True)
+
+            # NEVER expose raw errors to users - provide friendly message
+            friendly_message = (
+                "I'm having trouble fetching fixtures right now. "
+                "Please try again in a moment, or try:\n\n"
+                "• Being more specific (e.g., 'Premier League fixtures today')\n"
+                "• Checking a different league or date range\n"
+                "• Asking for predictions instead"
+            )
+
             return {
-                "message": f"❌ Error fetching fixtures: {str(e)}",
+                "message": friendly_message,
                 "intent": "show_fixtures",
                 "data": None,
-                "error": str(e),
+                "error": None,  # Don't expose error to user
             }
 
     def _mock_agent_predictions(self, market: str) -> list[dict[str, Any]]:
