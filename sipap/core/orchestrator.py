@@ -1250,6 +1250,12 @@ class MainOrchestrator:
             ...     "Bundesliga"
             ... )
             "Austria league"
+
+            >>> _extract_league_phrase_from_query(
+            ...     "What's the League results in Armenia?",
+            ...     "Premier League"
+            ... )
+            "Armenia Premier League"
         """
         import re
 
@@ -1279,6 +1285,21 @@ class MainOrchestrator:
             # Verify it's not generic words
             if country_word not in ["the", "what", "which", "premier", "europa"]:
                 return match2.group(0)  # Return "Austria league"
+
+        # Pattern 3: "in [Country]" (e.g., "results in Armenia", "League in Austria")
+        # This handles cases where country comes AFTER the league reference
+        pattern3 = r"in\s+(\w+)"
+        match3 = re.search(pattern3, query_lower)
+        if match3:
+            country_word = match3.group(1)
+            # Verify it's likely a country name (not generic words)
+            if country_word not in ["the", "a", "an", "my", "your", "our", "their"]:
+                # Combine country + canonical league name
+                # "in Armenia" + "Premier League" → "Armenia Premier League"
+                start_idx = match3.start(1)
+                end_idx = match3.end(1)
+                country_name = query[start_idx:end_idx]  # Preserve original casing
+                return f"{country_name} {canonical_league_name}"
 
         # Fallback: return canonical name if no country context found
         return None
