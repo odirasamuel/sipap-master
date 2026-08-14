@@ -339,6 +339,17 @@ class NLUAgent:
         message_lower = message.lower()
         entities: dict[str, Any] = {}
 
+        # Check for sports/betting keywords to ensure context is relevant
+        # CRITICAL: Require domain-specific keywords to avoid false positives
+        sports_keywords = [
+            "odds", "odd", "prediction", "predictions", "match", "matches",
+            "fixture", "fixtures", "bet", "betting", "accumulator", "parlay",
+            "selection", "selections", "game", "games", "vs", "against",
+            "team", "teams", "league", "leagues", "soccer", "football",
+            "basketball", "tennis", "sport", "sports"
+        ]
+        has_sports_context = any(keyword in message_lower for keyword in sports_keywords)
+
         # Detect intent type (order matters - check most specific first)
         if any(term in message_lower for term in ["update", "result", "how did", "what happened", "wrong"]):
             # Track results if asking about past predictions
@@ -370,10 +381,23 @@ class NLUAgent:
 
             if is_fixture_query and not has_number:
                 intent_type = "show_fixtures"
-                confidence = 0.7
-            elif has_number or (has_quality and not is_fixture_query):
+                confidence = 0.7 if has_sports_context else 0.4
+            elif has_number and has_sports_context:
+                # Explicit number + sports context = high confidence batch prediction
+                intent_type = "batch_prediction"
+                confidence = 0.8
+            elif has_number and not has_sports_context:
+                # Number but no sports context = unknown (e.g., "I need 20 items")
+                intent_type = "unknown"
+                confidence = 0.3
+            elif has_quality and has_sports_context and not is_fixture_query:
+                # Quality terms + sports context = batch prediction
                 intent_type = "batch_prediction"
                 confidence = 0.7
+            elif has_quality and not has_sports_context:
+                # Quality terms but no sports context = unknown (e.g., "Show me something good")
+                intent_type = "unknown"
+                confidence = 0.3
             elif has_multiple_teams and "what do you think" in message_lower:
                 # Multiple fixtures asked about = batch prediction
                 intent_type = "batch_prediction"
