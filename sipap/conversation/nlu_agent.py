@@ -482,15 +482,16 @@ class NLUAgent:
             entities["quality_terms"] = ["best possible", "good chance", "success"]
 
         # Extract leagues using comprehensive mappings (380 competitions) from sipap-common
-        from sipap_common.data import find_league_matches
+        # NEW: Extract structured league data with country context and competition type
+        leagues_data = self._extract_leagues_with_context(message)
 
-        leagues = find_league_matches(message)
-
-        if leagues:
-            entities["leagues"] = leagues
+        if leagues_data:
+            # Store both canonical names (for backward compatibility) and full structured data
+            entities["leagues"] = [league["canonical_name"] for league in leagues_data]
+            entities["leagues_data"] = leagues_data  # NEW: Structured data
             self.logger.debug(
-                f"Matched leagues: {leagues}",
-                extra={"query": message[:50], "leagues": leagues}
+                f"Matched leagues: {leagues_data}",
+                extra={"query": message[:50], "leagues": leagues_data}
             )
 
         # NOTE: Markets are NOT extracted from user messages
@@ -704,6 +705,123 @@ class NLUAgent:
             original_query=message,
             extracted_entities=entities,
         )
+
+    def _extract_leagues_with_context(self, query: str) -> list[dict[str, Any]]:
+        """Extract structured league data with country context and competition type.
+
+        This method properly parses league mentions in user queries and preserves:
+        1. Canonical league name (from sipap-common mappings)
+        2. Country context (from query phrasing)
+        3. Competition type (national_league vs international_tournament)
+        4. Original query text (for debugging and fallback)
+
+        Args:
+            query: User's original query
+
+        Returns:
+            List of structured league dictionaries with fields:
+            - canonical_name: Official league name (e.g., "Premier League")
+            - country: Country context if national league (e.g., "Wales"), None for international
+            - competition_type: "national_league" or "international_tournament"
+            - raw_text: Original phrasing from query (e.g., "Wales Premier League")
+
+        Examples:
+            >>> _extract_leagues_with_context("Wales Premier League results")
+            [{
+                "canonical_name": "Premier League",
+                "country": "Wales",
+                "competition_type": "national_league",
+                "raw_text": "Wales Premier League"
+            }]
+
+            >>> _extract_leagues_with_context("Champions League matches")
+            [{
+                "canonical_name": "UEFA Champions League",
+                "country": None,
+                "competition_type": "international_tournament",
+                "raw_text": "Champions League"
+            }]
+
+            >>> _extract_leagues_with_context("results in Armenia")
+            [{
+                "canonical_name": "Premier League",
+                "country": "Armenia",
+                "competition_type": "national_league",
+                "raw_text": "in Armenia"
+            }]
+        """
+        from sipap_common.data import find_league_matches
+
+        # International/continental tournaments (never have country context)
+        INTERNATIONAL_TOURNAMENTS = {
+            "uefa champions league", "uefa europa league", "uefa europa conference league",
+            "uefa nations league", "uefa super cup", "uefa youth league",
+            "world cup", "euro championship", "copa america", "africa cup of nations",
+            "asian cup", "concacaf gold cup", "conmebol libertadores", "conmebol sudamericana",
+            "caf champions league", "afc champions league", "concacaf champions league",
+            "fifa club world cup", "friendlies clubs"
+        }
+
+        # Country name mappings (100+ countries)
+        COUNTRY_NAMES = {
+            "albania", "armenia", "austria", "azerbaijan", "belgium", "bulgaria", "croatia",
+            "cyprus", "czech", "denmark", "england", "estonia", "finland", "france", "georgia",
+            "germany", "greece", "hungary", "iceland", "ireland", "israel", "italy", "latvia",
+            "lithuania", "malta", "moldova", "montenegro", "netherlands", "norway", "poland",
+            "portugal", "romania", "russia", "scotland", "serbia", "slovakia", "slovenia",
+            "spain", "sweden", "switzerland", "turkey", "ukraine", "wales",
+            "argentina", "bolivia", "brazil", "canada", "chile", "colombia", "costa rica",
+            "ecuador", "mexico", "paraguay", "peru", "usa", "united states", "uruguay", "venezuela",
+            "australia", "bahrain", "china", "india", "indonesia", "iran", "iraq", "japan",
+            "jordan", "kuwait", "malaysia", "qatar", "saudi arabia", "singapore", "south korea",
+            "korea", "thailand", "uae", "vietnam",
+            "algeria", "egypt", "ghana", "kenya", "morocco", "nigeria", "south africa",
+            "tunisia", "uganda", "zambia", "zimbabwe"
+        }
+
+        # Find canonical league names
+        canonical_leagues = find_league_matches(query)
+
+        if not canonical_leagues:
+            return []
+
+        # For each canonical league, extract country context and determine type
+        leagues_data = []
+        query_lower = query.lower()
+
+        for canonical_name in canonical_leagues:
+            # Determine if this is an international tournament
+            is_international = canonical_name.lower() in INTERNATIONAL_TOURNAMENTS
+
+            # Extract country context
+            country = None
+            raw_text = canonical_name
+
+            if not is_international:
+                # Try to extract country from query
+                # Pattern 1: "[Country] [League]" (e.g., "Wales Premier League")
+                # Pattern 2: "in [Country]" (e.g., "results in Armenia")
+                # Pattern 3: "[Country] league" (e.g., "Austria league")
+
+                for country_name in COUNTRY_NAMES:
+                    if country_name in query_lower:
+                        country = country_name.title()  # Capitalize
+                        # Try to extract the raw text that includes country + league
+                        if canonical_name.lower() in query_lower:
+                            # Find the country and league mentions
+                            raw_text = f"{country} {canonical_name}"
+                        else:
+                            raw_text = f"in {country}"
+                        break
+
+            leagues_data.append({
+                "canonical_name": canonical_name,
+                "country": country,
+                "competition_type": "international_tournament" if is_international else "national_league",
+                "raw_text": raw_text,
+            })
+
+        return leagues_data
 
     def _convert_regex_to_request_intent(
         self,
