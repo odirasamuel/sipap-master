@@ -1136,37 +1136,53 @@ class MainOrchestrator:
                     "error": None,
                 }
 
-            # Format match results for WhatsApp
-            lines = [f"📊 Match Results ({count} matches):\n"]
+            # Format match results for WhatsApp with pagination
+            # WhatsApp limit: 1600 chars per message
+            # Paginate: 10 matches per page (safe limit for char count)
+            pages = []
+            page_size = 10
 
-            for match in matches[:10]:  # Limit to 10 matches for WhatsApp
-                fixture = match.get("fixture", {})
-                teams = match.get("teams", {})
-                goals = match.get("goals", {})
-                league = match.get("league", {})
+            for page_num in range(0, count, page_size):
+                page_matches = matches[page_num:page_num + page_size]
+                page_index = page_num // page_size + 1
+                total_pages = (count + page_size - 1) // page_size
 
-                home_team = teams.get("home", {}).get("name", "Unknown")
-                away_team = teams.get("away", {}).get("name", "Unknown")
-                home_goals = goals.get("home")
-                away_goals = goals.get("away")
-                status = fixture.get("status", {}).get("short", "")
-                league_name = league.get("name", "")
-
-                # Format score display
-                if home_goals is not None and away_goals is not None:
-                    score_display = f"{home_team} {home_goals}-{away_goals} {away_team}"
+                # Page header
+                if total_pages > 1:
+                    lines = [f"📊 Match Results (Page {page_index}/{total_pages}):\n"]
                 else:
-                    score_display = f"{home_team} vs {away_team}"
+                    lines = [f"📊 Match Results ({count} matches):\n"]
 
-                # Add status indicator
-                status_emoji = "🟢" if status == "LIVE" else "✅" if status == "FT" else "⏰"
+                # Format matches for this page
+                for match in page_matches:
+                    fixture = match.get("fixture", {})
+                    teams = match.get("teams", {})
+                    goals = match.get("goals", {})
+                    league = match.get("league", {})
 
-                lines.append(f"{status_emoji} {score_display} [{league_name}]")
+                    home_team = teams.get("home", {}).get("name", "Unknown")
+                    away_team = teams.get("away", {}).get("name", "Unknown")
+                    home_goals = goals.get("home")
+                    away_goals = goals.get("away")
+                    status = fixture.get("status", {}).get("short", "")
+                    league_name = league.get("name", "")
 
-            if count > 10:
-                lines.append(f"\n... and {count - 10} more matches")
+                    # Format score display
+                    if home_goals is not None and away_goals is not None:
+                        score_display = f"{home_team} {home_goals}-{away_goals} {away_team}"
+                    else:
+                        score_display = f"{home_team} vs {away_team}"
 
-            message = "\n".join(lines)
+                    # Add status indicator
+                    status_emoji = "🟢" if status == "LIVE" else "✅" if status == "FT" else "⏰"
+
+                    lines.append(f"{status_emoji} {score_display} [{league_name}]")
+
+                pages.append("\n".join(lines))
+
+            # Join pages with PAGE_BREAK marker for automatic pagination
+            # daemon.send_whatsapp_response() will split and send separately
+            message = "[PAGE_BREAK]".join(pages)
 
             return {
                 "message": message,
