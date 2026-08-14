@@ -895,9 +895,18 @@ IMPORTANT:
 
 Return ONLY valid JSON, no extra text."""
 
+        from datetime import UTC, datetime
+
+        # Get current date for "today" reference
+        today_date = datetime.now(UTC).date().isoformat()
+
         user_prompt = f"""Parse this user query into structured intent:
 
+**CURRENT DATE:** {today_date}
+
 USER QUERY: "{message}"
+
+IMPORTANT: When user says "today", use {today_date} for the date_range.
 
 Return JSON format:
 {{
