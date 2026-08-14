@@ -1628,29 +1628,32 @@ class MainOrchestrator:
             # Extract league/country filters
             league_names = []
 
-            # Check for explicit league names in intent
+            # Check for explicit league names in intent (NLU already extracted these)
             if intent.leagues:
                 league_names.extend(intent.leagues)
-
-            # Check for country/location in extracted entities or original query
-            entities = intent.extracted_entities or {}
-
-            # Map country names to league names
-            # Use comprehensive league mappings (380 competitions) from sipap-common
-            from sipap_common.data import find_league_matches
-
-            # Find league matches from user query (country names, competition aliases, etc.)
-            matched_leagues = find_league_matches(intent.original_query)
-
-            if matched_leagues:
-                league_names.extend(matched_leagues)
-                params["league_names"] = league_names
                 self.logger.info(
-                    f"Matched leagues from query: {matched_leagues}",
-                    extra={"query": intent.original_query, "matched": matched_leagues}
+                    f"Using leagues from NLU: {intent.leagues}",
+                    extra={"leagues": intent.leagues}
                 )
             else:
-                self.logger.debug("No league filter applied, querying all leagues")
+                # Fallback: Use comprehensive league mappings if NLU didn't extract leagues
+                from sipap_common.data import find_league_matches
+
+                # Find league matches from user query (country names, competition aliases, etc.)
+                matched_leagues = find_league_matches(intent.original_query)
+
+                if matched_leagues:
+                    league_names.extend(matched_leagues)
+                    self.logger.info(
+                        f"Matched leagues from query (fallback): {matched_leagues}",
+                        extra={"query": intent.original_query, "matched": matched_leagues}
+                    )
+                else:
+                    self.logger.debug("No league filter applied, querying all leagues")
+
+            # Set league filter params if we have any
+            if league_names:
+                params["league_names"] = league_names
 
             # Show upcoming matches (API-Football uses 'NS' for Not Started, not 'scheduled')
             params["status"] = "NS"  # Match API-Football status codes
