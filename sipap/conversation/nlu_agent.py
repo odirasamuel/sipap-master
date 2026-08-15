@@ -882,7 +882,12 @@ KEY DISTINCTIONS:
 - Queries with "played", "happened", "final score" are ALWAYS get_match_results
 
 ENTITY EXTRACTION:
-- leagues: Extract league names (e.g., "LaLiga", "Europa League", "Premier League")
+- leagues: Extract league phrases EXACTLY as user says them, preserving country context
+  * If user says "Belarus league" → extract ["Belarus league"]
+  * If user says "Spanish LaLiga" → extract ["Spanish LaLiga"]
+  * If user says "Wales Premier League" → extract ["Wales Premier League"]
+  * If user says "Club friendlies" → extract ["Club friendlies"]
+  * DO NOT convert to canonical names - preserve user's exact wording!
 - date_range: Extract dates (today = current date, tomorrow = next day, etc.)
 - teams: Extract team names if mentioned
 - target_odds: Extract numbers when user says "X odds" or "X matches"
@@ -912,12 +917,18 @@ Return JSON format:
 {{
     "intent_type": "get_match_results|show_fixtures|batch_prediction|single_prediction|track_results|check_odds|explain|unknown",
     "confidence": 0.0-1.0,
-    "leagues": ["league1", "league2"],
+    "leagues": ["league1", "league2"],  // Extract EXACTLY as user says
     "teams": {{"home": "team1", "away": "team2"}},
     "date_range": {{"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}},
     "target_odds": null or number,
     "reasoning": "brief explanation"
-}}"""
+}}
+
+EXAMPLES:
+- User: "Belarus league results" → leagues: ["Belarus league"]
+- User: "Spanish LaLiga fixtures" → leagues: ["Spanish LaLiga"]
+- User: "Club friendlies yesterday" → leagues: ["Club friendlies"]
+- User: "Wales Premier League" → leagues: ["Wales Premier League"]"""
 
         # Invoke Claude via Bedrock
         try:

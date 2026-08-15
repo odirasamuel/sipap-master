@@ -1007,38 +1007,24 @@ class MainOrchestrator:
             params["date"] = date_start
 
             # Add league filter if provided
-            # NEW: Use structured league data from NLU (canonical name + country context)
-            # No more regex workarounds - NLU provides clean structured data
+            # NEW ARCHITECTURE: Pass raw league phrase directly to Intelligence MCP
+            # Claude NLU now extracts EXACT user phrasing (e.g., "Belarus league", "Spanish LaLiga")
+            # Intelligence MCP handles ALL canonicalization + country extraction in one place
             league_names = None
-            league_with_country = None
             if intent.leagues and len(intent.leagues) > 0:
-                league_names = intent.leagues  # For database query (canonical names)
+                # For database query: use sipap-common's find_league_matches() to get canonical names
+                from sipap_common.data import find_league_matches
 
-                # Check if NLU provided structured league data (NEW architecture)
-                leagues_data = intent.extracted_entities.get("leagues_data", [])
-                if leagues_data and len(leagues_data) > 0:
-                    # Use structured data: canonical name + country context
-                    first_league = leagues_data[0]
-                    canonical = first_league["canonical_name"]
-                    country = first_league.get("country")
+                raw_league_phrase = intent.leagues[0]  # Claude's raw extraction
+                league_names = find_league_matches(raw_league_phrase)
 
-                    # For Intelligence MCP: pass "Country CanonicalName" if country exists
-                    # This preserves context: "Wales Premier League" not just "Premier League"
-                    if country:
-                        league_with_country = f"{country} {canonical}"
-                    else:
-                        # International tournament (no country)
-                        league_with_country = canonical
+                # For Intelligence MCP: pass raw phrase as-is (it does its own canonicalization)
+                params["league_name"] = raw_league_phrase
 
-                    params["league_name"] = league_with_country
-                else:
-                    # Fallback: Old architecture (for backward compatibility during transition)
-                    # DEPRECATED: Remove after confirming NLU provides leagues_data
-                    raw_league_phrase = self._extract_league_phrase_from_query(
-                        intent.original_query,
-                        intent.leagues[0]
-                    )
-                    params["league_name"] = raw_league_phrase or intent.leagues[0]
+                self.logger.info(
+                    f"League filter: raw='{raw_league_phrase}', canonical={league_names}",
+                    extra={"raw": raw_league_phrase, "canonical": league_names}
+                )
 
             # Add team filter if provided
             team_name = None
@@ -1683,32 +1669,27 @@ class MainOrchestrator:
                 self.logger.debug(f"Using default date range: {params['date_from']} to {params['date_to']}")
 
             # Extract league/country filters
-            league_names = []
+            # NEW ARCHITECTURE: Claude NLU extracts raw phrases, we canonicalize for database
+            league_names = []  # Canonical names for database query
+            raw_league_phrase = None  # Raw phrase for Intelligence MCP
 
-            # Check for explicit league names in intent (NLU already extracted these)
             if intent.leagues:
-                league_names.extend(intent.leagues)
+                # Claude extracted raw league phrase (e.g., "Belarus league", "Spanish LaLiga")
+                raw_league_phrase = intent.leagues[0]
+
+                # Canonicalize for database query using sipap-common mappings
+                from sipap_common.data import find_league_matches
+                league_names = find_league_matches(raw_league_phrase)
+
                 self.logger.info(
-                    f"Using leagues from NLU: {intent.leagues}",
-                    extra={"leagues": intent.leagues}
+                    f"League filter: raw='{raw_league_phrase}', canonical={league_names}",
+                    extra={"raw": raw_league_phrase, "canonical": league_names}
                 )
             else:
-                # Fallback: Use comprehensive league mappings if NLU didn't extract leagues
-                from sipap_common.data import find_league_matches
+                # Fallback: No leagues extracted by NLU
+                self.logger.debug("No league filter applied, querying all leagues")
 
-                # Find league matches from user query (country names, competition aliases, etc.)
-                matched_leagues = find_league_matches(intent.original_query)
-
-                if matched_leagues:
-                    league_names.extend(matched_leagues)
-                    self.logger.info(
-                        f"Matched leagues from query (fallback): {matched_leagues}",
-                        extra={"query": intent.original_query, "matched": matched_leagues}
-                    )
-                else:
-                    self.logger.debug("No league filter applied, querying all leagues")
-
-            # Set league filter params if we have any
+            # Set league filter params for database query (canonical names)
             if league_names:
                 params["league_names"] = league_names
 
@@ -1754,9 +1735,10 @@ class MainOrchestrator:
                         "status": "NS",  # Not Started (upcoming fixtures)
                     }
 
-                    # Add league filter if provided (use first league name)
-                    if league_names and len(league_names) > 0:
-                        api_params["league_name"] = league_names[0]
+                    # Add league filter if provided (use RAW phrase for Intelligence MCP)
+                    # Intelligence MCP does its own canonicalization with country extraction
+                    if raw_league_phrase:
+                        api_params["league_name"] = raw_league_phrase
 
                     self.logger.info(
                         "Calling Intelligence MCP get_match_results (status=NS for upcoming)",
