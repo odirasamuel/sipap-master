@@ -1459,25 +1459,73 @@ class MainOrchestrator:
         lines = []
 
         for fixture in fixtures:
-            home = fixture.get("home_team", "Unknown")
-            away = fixture.get("away_team", "Unknown")
-            league = fixture.get("league", "")
-            status = fixture.get("status", "NS")  # NS, FT, 1H, 2H, etc.
-            scheduled_at = fixture.get("scheduled_at", "")
+            # Extract team names (handle both Data MCP and Intelligence MCP formats)
+            # Data MCP: "home_team", "away_team" (strings)
+            # Intelligence MCP: "teams" dict with "home" and "away" sub-dicts
+            teams_data = fixture.get("teams")
+            if teams_data and isinstance(teams_data, dict):
+                # Intelligence MCP format
+                home = teams_data.get("home", {}).get("name", "Unknown")
+                away = teams_data.get("away", {}).get("name", "Unknown")
+            else:
+                # Data MCP format
+                home = fixture.get("home_team", "Unknown")
+                away = fixture.get("away_team", "Unknown")
+
+            # Extract league name (handle both formats)
+            # Data MCP: "league" (string)
+            # Intelligence MCP: "league" dict with "name", "country", etc.
+            league_data = fixture.get("league")
+            if league_data and isinstance(league_data, dict):
+                # Intelligence MCP format
+                league = league_data.get("name", "")
+            else:
+                # Data MCP format
+                league = league_data or ""
+
+            # Extract status (handle both formats)
+            # Data MCP: "status" (string)
+            # Intelligence MCP: "fixture" dict with "status" sub-dict
+            fixture_info = fixture.get("fixture")
+            if fixture_info and isinstance(fixture_info, dict):
+                status_data = fixture_info.get("status", {})
+                if isinstance(status_data, dict):
+                    status = status_data.get("short", "NS")
+                else:
+                    status = status_data or "NS"
+            else:
+                status = fixture.get("status", "NS")  # NS, FT, 1H, 2H, etc.
+
+            # Extract scheduled time (handle both formats)
+            # Data MCP: "scheduled_at"
+            # Intelligence MCP: "fixture" dict with "date"
+            if fixture_info and isinstance(fixture_info, dict):
+                scheduled_at = fixture_info.get("date", "")
+            else:
+                scheduled_at = fixture.get("scheduled_at", "")
 
             # Extract time (HH:MM)
             time_part = ""
             if scheduled_at and "T" in scheduled_at:
                 time_part = scheduled_at.split("T")[1][:5]
 
-            # Get odds
+            # Get odds (Data MCP format)
             h_odds = fixture.get("best_home_odds")
             d_odds = fixture.get("best_draw_odds")
             a_odds = fixture.get("best_away_odds")
 
-            # Get results (for finished matches)
-            home_score = fixture.get("home_score")
-            away_score = fixture.get("away_score")
+            # Get results (handle both formats)
+            # Data MCP: "home_score", "away_score" (integers)
+            # Intelligence MCP: "goals" dict with "home", "away"
+            goals_data = fixture.get("goals")
+            if goals_data and isinstance(goals_data, dict):
+                # Intelligence MCP format
+                home_score = goals_data.get("home")
+                away_score = goals_data.get("away")
+            else:
+                # Data MCP format
+                home_score = fixture.get("home_score")
+                away_score = fixture.get("away_score")
 
             # Abbreviate league name for compact display
             league_abbrev = self._abbreviate_league(league)
@@ -1489,8 +1537,17 @@ class MainOrchestrator:
                 if league_abbrev:
                     line += f" ({league_abbrev})"
             elif status in ("1H", "2H", "HT", "LIVE"):
-                # Live match
-                minute = fixture.get("elapsed", "")
+                # Live match - extract elapsed time
+                # Data MCP: "elapsed" (integer)
+                # Intelligence MCP: "fixture.status.elapsed" (integer)
+                if fixture_info and isinstance(fixture_info, dict):
+                    status_info = fixture_info.get("status", {})
+                    if isinstance(status_info, dict):
+                        minute = status_info.get("elapsed", "")
+                    else:
+                        minute = ""
+                else:
+                    minute = fixture.get("elapsed", "")
                 score_str = ""
                 if home_score is not None and away_score is not None:
                     score_str = f" {home_score}-{away_score}"
