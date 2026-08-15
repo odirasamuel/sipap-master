@@ -1446,7 +1446,7 @@ class MainOrchestrator:
         """Format fixtures in condensed format with automatic pagination.
 
         Condensed format examples:
-        - Scheduled: ⚽ 15:00 Arsenal v Chelsea (PL) - 2.50/3.20/2.80
+        - Scheduled: ⚽ 15:00 Arsenal v Chelsea (PL) [ 2.50 | 3.20 | 2.80 ]
         - Finished: ✅ Arsenal 2-1 Chelsea (Premier League)
         - Live: 🔴 Arsenal 1-0 Chelsea 45' (Premier League)
 
@@ -1573,9 +1573,9 @@ class MainOrchestrator:
                 line = f"⚽ {time_part} {home} v {away}"
                 if league_abbrev:
                     line += f" ({league_abbrev})"
-                # Add odds if available
-                if h_odds and d_odds and a_odds:
-                    line += f" - {h_odds:.2f}/{d_odds:.2f}/{a_odds:.2f}"
+                # Add odds if available (use is not None to handle 0.0 values)
+                if h_odds is not None and d_odds is not None and a_odds is not None:
+                    line += f" [ {h_odds:.2f} | {d_odds:.2f} | {a_odds:.2f} ]"
 
             lines.append(line)
 
