@@ -1589,20 +1589,14 @@ class MainOrchestrator:
         return self._paginate_message(header, lines, max_length, count)
 
     def _abbreviate_league(self, league: str) -> str:
-        """Abbreviate common league names for compact display."""
-        abbrev_map = {
-            "Premier League": "PL",
-            "UEFA Champions League": "UCL",
-            "UEFA Europa League": "UEL",
-            "UEFA Conference League": "UECL",
-            "La Liga": "LaLiga",
-            "Serie A": "Serie A",
-            "Bundesliga": "BuLi",
-            "Ligue 1": "L1",
-            "Eredivisie": "Eredivisie",
-            "Championship": "Champ",
-        }
-        return abbrev_map.get(league, league[:20])  # Max 20 chars for unknown leagues
+        """Abbreviate league names for compact display.
+
+        Uses comprehensive LEAGUE_ABBREVIATIONS from sipap-common.
+        Supports 50+ leagues with fallback to truncation for unknown leagues.
+        """
+        from sipap_common.data import abbreviate_league
+
+        return abbreviate_league(league, max_length=20)
 
     def _paginate_message(
         self,
