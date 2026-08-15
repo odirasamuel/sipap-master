@@ -1691,19 +1691,49 @@ class MainOrchestrator:
             # NEW ARCHITECTURE: Claude NLU extracts raw phrases, we canonicalize for database
             league_names = []  # Canonical names for database query
             raw_league_phrase = None  # Raw phrase for Intelligence MCP
+            is_generic_query = False  # Generic "[country] league/leagues" pattern
+            country_for_generic = None  # Country if generic pattern detected
 
             if intent.leagues:
                 # Claude extracted raw league phrase (e.g., "Belarus league", "Spanish LaLiga")
                 raw_league_phrase = intent.leagues[0]
 
-                # Canonicalize for database query using sipap-common mappings
-                from sipap_common.data import find_league_matches
-                league_names = find_league_matches(raw_league_phrase)
+                # CRITICAL: Check if this is generic "[country] league/leagues" pattern
+                # Example: "Spanish league" → ALL Spanish leagues
+                # vs "Spanish La Liga" → ONLY La Liga
+                from sipap_common.data import is_generic_country_league_query
 
-                self.logger.info(
-                    f"League filter: raw='{raw_league_phrase}', canonical={league_names}",
-                    extra={"raw": raw_league_phrase, "canonical": league_names}
-                )
+                is_generic, generic_country = is_generic_country_league_query(intent.original_query)
+
+                if is_generic:
+                    # Generic pattern detected - user wants ALL leagues for this country
+                    is_generic_query = True
+                    country_for_generic = generic_country
+
+                    # Get ALL leagues for this country
+                    from sipap_common.data import get_leagues_for_country
+
+                    league_names = get_leagues_for_country(generic_country)
+
+                    self.logger.info(
+                        f"Generic country query detected: '{raw_league_phrase}' → "
+                        f"ALL {generic_country} leagues ({len(league_names)} competitions)",
+                        extra={
+                            "raw": raw_league_phrase,
+                            "country": generic_country,
+                            "leagues_count": len(league_names),
+                            "pattern": "generic_country_leagues"
+                        }
+                    )
+                else:
+                    # Specific league pattern - use existing canonicalization
+                    from sipap_common.data import find_league_matches
+                    league_names = find_league_matches(raw_league_phrase)
+
+                    self.logger.info(
+                        f"Specific league query: raw='{raw_league_phrase}', canonical={league_names}",
+                        extra={"raw": raw_league_phrase, "canonical": league_names, "pattern": "specific_league"}
+                    )
             else:
                 # Fallback: No leagues extracted by NLU
                 self.logger.debug("No league filter applied, querying all leagues")
