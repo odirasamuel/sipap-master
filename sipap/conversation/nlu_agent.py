@@ -917,18 +917,19 @@ Return JSON format:
 {{
     "intent_type": "get_match_results|show_fixtures|batch_prediction|single_prediction|track_results|check_odds|explain|unknown",
     "confidence": 0.0-1.0,
-    "leagues": ["league1", "league2"],  // Extract EXACTLY as user says
+    "leagues": ["exact league phrase from user query"],
     "teams": {{"home": "team1", "away": "team2"}},
     "date_range": {{"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}},
-    "target_odds": null or number,
+    "target_odds": null,
     "reasoning": "brief explanation"
 }}
 
-EXAMPLES:
-- User: "Belarus league results" → leagues: ["Belarus league"]
-- User: "Spanish LaLiga fixtures" → leagues: ["Spanish LaLiga"]
-- User: "Club friendlies yesterday" → leagues: ["Club friendlies"]
-- User: "Wales Premier League" → leagues: ["Wales Premier League"]"""
+CRITICAL: Extract leagues EXACTLY as user says them:
+- "Belarus league results" → leagues: ["Belarus league"]
+- "Spanish LaLiga fixtures" → leagues: ["Spanish LaLiga"]
+- "Club friendlies yesterday" → leagues: ["Club friendlies"]
+- "Wales Premier League" → leagues: ["Wales Premier League"]
+- "Show me Spanish LaLiga fixtures" → leagues: ["Spanish LaLiga"]"""
 
         # Invoke Claude via Bedrock
         try:
