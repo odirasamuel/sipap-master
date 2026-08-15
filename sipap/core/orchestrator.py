@@ -1678,30 +1678,100 @@ class MainOrchestrator:
                 extra={"count": count, "filters": filters_applied}
             )
 
-            # Format results for user
+            # FALLBACK: If database has no fixtures, try Intelligence MCP (API-Football)
+            # This ensures we get real-time data for today's matches
             if count == 0:
-                # Build helpful message based on what filters were applied
-                filter_desc = []
-                if params.get("league_names"):
-                    filter_desc.append(f"leagues: {', '.join(params['league_names'])}")
-                if params.get("date_from"):
-                    filter_desc.append(f"date: {params['date_from']}")
-
-                filter_text = " with " + " and ".join(filter_desc) if filter_desc else ""
-
-                message = (
-                    f"No fixtures found{filter_text}.\n\n"
-                    f"Try:\n"
-                    f"- Different date range\n"
-                    f"- Different leagues/countries\n"
-                    f"- Checking available competitions"
+                self.logger.info(
+                    "Database returned no fixtures, trying Intelligence MCP (API-Football) for real-time data"
                 )
-                return {
-                    "message": message,
-                    "intent": "show_fixtures",
-                    "data": result,
-                    "error": None,
-                }
+
+                try:
+                    # Get Intelligence MCP client
+                    intelligence_mcp = self.mcp_factory.create("intelligence")
+
+                    # Prepare API-Football parameters
+                    api_params: dict[str, Any] = {
+                        "date_from": params.get("date_from"),
+                        "date_to": params.get("date_to"),
+                        "status": "NS",  # Not Started
+                    }
+
+                    # Add league filter if provided (use first league name)
+                    if league_names and len(league_names) > 0:
+                        api_params["league_name"] = league_names[0]
+
+                    self.logger.info(
+                        "Calling Intelligence MCP get_upcoming_fixtures",
+                        extra={"params": api_params}
+                    )
+
+                    # Call Intelligence MCP
+                    api_result = await intelligence_mcp.call_tool("get_upcoming_fixtures", api_params)
+                    fixtures = api_result.get("fixtures", [])
+                    count = len(fixtures)
+
+                    self.logger.info(
+                        f"Intelligence MCP (API-Football) returned {count} fixtures",
+                        extra={"count": count}
+                    )
+
+                    # If still no fixtures, return helpful message
+                    if count == 0:
+                        filter_desc = []
+                        if params.get("league_names"):
+                            filter_desc.append(f"leagues: {', '.join(params['league_names'])}")
+                        if params.get("date_from"):
+                            filter_desc.append(f"date: {params['date_from']}")
+
+                        filter_text = " with " + " and ".join(filter_desc) if filter_desc else ""
+
+                        message = (
+                            f"No fixtures found{filter_text}.\n\n"
+                            f"Try:\n"
+                            f"- Different date range\n"
+                            f"- Different leagues/countries\n"
+                            f"- Checking available competitions"
+                        )
+                        return {
+                            "message": message,
+                            "intent": "show_fixtures",
+                            "data": api_result,
+                            "error": None,
+                        }
+
+                    # Update filters_applied to reflect we used API-Football
+                    filters_applied = {
+                        "date_from": api_params.get("date_from"),
+                        "date_to": api_params.get("date_to"),
+                        "league_name": api_params.get("league_name"),
+                        "data_source": "api-football"
+                    }
+
+                except Exception as api_error:
+                    self.logger.error(f"Intelligence MCP fallback failed: {api_error}", exc_info=True)
+
+                    # Return database "no fixtures" message if API also fails
+                    filter_desc = []
+                    if params.get("league_names"):
+                        filter_desc.append(f"leagues: {', '.join(params['league_names'])}")
+                    if params.get("date_from"):
+                        filter_desc.append(f"date: {params['date_from']}")
+
+                    filter_text = " with " + " and ".join(filter_desc) if filter_desc else ""
+
+                    message = (
+                        f"No fixtures found{filter_text}.\n\n"
+                        f"Try:\n"
+                        f"- Different date range\n"
+                        f"- Different leagues/countries\n"
+                        f"- Checking available competitions"
+                    )
+                    return {
+                        "message": message,
+                        "intent": "show_fixtures",
+                        "data": result,
+                        "error": None,
+                    }
 
             # Format fixture listings for WhatsApp (condensed format with pagination)
             message = self._format_fixtures_with_pagination(
