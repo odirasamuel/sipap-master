@@ -22,6 +22,28 @@ from sipap.conversation.intent_parser import Intent, IntentParser
 from sipap_common.logging import get_logger
 
 
+class LeagueEntity(BaseModel):
+    """Structured league entity with API-Football ID for unambiguous resolution.
+
+    This model ensures leagues are resolved to their unique API-Football IDs,
+    eliminating string matching ambiguity (e.g., "Premier League" exists in
+    multiple countries: England=39, Wales=113, Belarus=117).
+
+    The id field is the API-Football competition ID which maps directly to
+    the external_id column in the database leagues table.
+
+    Example:
+        >>> league = LeagueEntity(id=140, name="La Liga", country="Spain")
+        >>> # Can now query: WHERE external_id = '140'
+    """
+
+    id: int  # API-Football competition ID (e.g., 140 for La Liga)
+    name: str  # Canonical name (e.g., "La Liga")
+    country: str | None = None  # Country for disambiguation (e.g., "Spain")
+
+    model_config = ConfigDict(frozen=True)  # Immutable once created
+
+
 class RequestIntent(BaseModel):
     """Structured user intent with extracted entities.
 
@@ -35,12 +57,20 @@ class RequestIntent(BaseModel):
     2. Accumulate: sum(bookmaker_odds_per_fixture) until sum >= target_odds
     3. Example: Fixture1 (2.5 odds) + Fixture2 (3.0 odds) + ... = 20+ total
 
+    LEAGUE RESOLUTION:
+    The leagues field now contains LeagueEntity objects with API-Football IDs.
+    This enables unambiguous resolution:
+    - "La Liga" → LeagueEntity(id=140, name="La Liga", country="Spain")
+    - "Premier League" (England) → LeagueEntity(id=39, name="Premier League", country="England")
+    - "Premier League" (Belarus) → LeagueEntity(id=117, name="Premier League", country="Belarus")
+
     Example:
         >>> intent = RequestIntent(
         ...     intent_type="batch_prediction",
         ...     confidence=0.9,
         ...     target_odds=20.0,  # Accumulate until sum >= 20
         ...     accumulation_mode=True,
+        ...     leagues=[LeagueEntity(id=140, name="La Liga", country="Spain")],
         ...     quality_threshold="highest",
         ...     original_query="I need 20 odds with highest positive outcome"
         ... )
@@ -64,7 +94,7 @@ class RequestIntent(BaseModel):
     accumulation_mode: bool = False  # True when user wants accumulated odds (default behavior)
     num_matches: int | None = Field(default=None, ge=1, le=50)  # Explicit fixture count (rare)
 
-    leagues: list[str] | None = None  # ["Premier League", "LaLiga", ...]
+    leagues: list[LeagueEntity] | None = None  # [LeagueEntity(id=140, name="La Liga", country="Spain"), ...]
     date_range: dict[str, str] | None = None  # {"start": "2026-08-03", "end": "2026-08-10"}
     markets: list[str] | None = None  # INTERNAL USE ONLY - Not extracted from user messages
     quality_threshold: Literal["highest", "high", "medium"] | None = None
@@ -492,19 +522,28 @@ class NLUAgent:
             quality_threshold = "high"
             entities["quality_terms"] = ["best possible", "good chance", "success"]
 
-        # Extract leagues using comprehensive mappings (380 competitions) from sipap-common
-        # NEW: Extract structured league data with country context and competition type
-        leagues_data = self._extract_leagues_with_context(message)
-        leagues = None
+        # CRITICAL: Use ID-first resolution with API-Football IDs
+        # This eliminates string matching ambiguity (e.g., "Premier League" exists in multiple countries)
+        from sipap_common.data.league_reference import resolve_league_query
 
-        if leagues_data:
-            # Store both canonical names (for backward compatibility) and full structured data
-            leagues = [league["canonical_name"] for league in leagues_data]
-            entities["leagues"] = leagues
-            entities["leagues_data"] = leagues_data  # NEW: Structured data
+        resolved = resolve_league_query(message)
+        leagues: list[LeagueEntity] | None = None
+
+        if resolved:
+            # Convert to LeagueEntity objects with API-Football IDs
+            leagues = [
+                LeagueEntity(
+                    id=league["id"],
+                    name=league["name"],
+                    country=league.get("country")
+                )
+                for league in resolved
+            ]
+            entities["leagues"] = leagues  # list[LeagueEntity]
+            entities["league_ids"] = [l.id for l in leagues]  # Quick ID access
             self.logger.debug(
-                f"Matched leagues: {leagues_data}",
-                extra={"query": message[:50], "leagues": leagues_data}
+                f"Resolved leagues to IDs: {[(l.id, l.name, l.country) for l in leagues]}",
+                extra={"query": message[:50], "league_ids": [l.id for l in leagues]}
             )
 
         # NOTE: Markets are NOT extracted from user messages
@@ -987,9 +1026,45 @@ CRITICAL: Extract leagues EXACTLY as user says them:
         intent_type = intent_data.get("intent_type", "unknown")
         confidence = float(intent_data.get("confidence", 0.5))
 
-        # Extract leagues with structured data
-        leagues = intent_data.get("leagues", [])
-        leagues_data = self._extract_leagues_with_context(original_query) if leagues else []
+        # CRITICAL: Use ID-first resolution with API-Football IDs
+        # This eliminates string matching ambiguity (e.g., "Premier League" exists in multiple countries)
+        from sipap_common.data.league_reference import resolve_league_query
+
+        raw_leagues = intent_data.get("leagues", [])
+        leagues: list[LeagueEntity] | None = None
+
+        if raw_leagues:
+            # Resolve each league phrase to LeagueEntity with API-Football ID
+            all_resolved: list[LeagueEntity] = []
+            for raw_league in raw_leagues:
+                resolved = resolve_league_query(raw_league)
+                for league_data in resolved:
+                    all_resolved.append(LeagueEntity(
+                        id=league_data["id"],
+                        name=league_data["name"],
+                        country=league_data.get("country")
+                    ))
+            leagues = all_resolved if all_resolved else None
+            self.logger.info(
+                f"Claude NLU resolved leagues to IDs: {[(l.id, l.name, l.country) for l in all_resolved] if all_resolved else 'None'}",
+                extra={"raw_leagues": raw_leagues, "resolved_ids": [l.id for l in all_resolved] if all_resolved else []}
+            )
+        else:
+            # Also try to resolve from original query as fallback
+            resolved = resolve_league_query(original_query)
+            if resolved:
+                leagues = [
+                    LeagueEntity(
+                        id=league_data["id"],
+                        name=league_data["name"],
+                        country=league_data.get("country")
+                    )
+                    for league_data in resolved
+                ]
+                self.logger.info(
+                    f"Claude NLU extracted leagues from query: {[(l.id, l.name, l.country) for l in leagues]}",
+                    extra={"query": original_query[:50], "resolved_ids": [l.id for l in leagues]}
+                )
 
         # Extract teams
         teams = intent_data.get("teams", {})
@@ -1013,10 +1088,11 @@ CRITICAL: Extract leagues EXACTLY as user says them:
         # Extract target odds
         target_odds = intent_data.get("target_odds")
 
-        # Build entities dict
+        # Build entities dict with API-Football IDs for traceability
         entities = {
-            "leagues": leagues,
-            "leagues_data": leagues_data,
+            "leagues": leagues,  # list[LeagueEntity] | None
+            "league_ids": [l.id for l in leagues] if leagues else [],  # For quick ID access
+            "raw_leagues": raw_leagues,  # Original phrases from Claude
             "teams": teams,
             "date_range": date_range,
             "target_odds": target_odds,
@@ -1065,18 +1141,25 @@ CRITICAL: Extract leagues EXACTLY as user says them:
 
         intent_type = intent_map.get(intent_str, "unknown")
 
-        # CRITICAL FIX: Extract leagues from original query
-        # The regex parser doesn't extract leagues, so we need to do it here
-        # This ensures league filtering works for show_fixtures/get_match_results
-        leagues_data = self._extract_leagues_with_context(original_query)
-        leagues = None
-        if leagues_data:
-            # Extract raw phrases from structured data - orchestrator handles canonicalization
-            # We preserve the original query phrasing for better fallback matching
-            leagues = [data.get("raw_text", data["canonical_name"]) for data in leagues_data]
+        # CRITICAL: Use ID-first resolution with API-Football IDs
+        # This eliminates string matching ambiguity (e.g., "Premier League" exists in multiple countries)
+        from sipap_common.data.league_reference import resolve_league_query
+
+        leagues: list[LeagueEntity] | None = None
+        resolved_leagues = resolve_league_query(original_query)
+        if resolved_leagues:
+            # Convert to LeagueEntity objects with API-Football IDs
+            leagues = [
+                LeagueEntity(
+                    id=league["id"],
+                    name=league["name"],
+                    country=league.get("country")
+                )
+                for league in resolved_leagues
+            ]
             self.logger.info(
-                f"Regex fallback extracted leagues: {leagues}",
-                extra={"query": original_query[:50], "leagues": leagues}
+                f"Regex fallback resolved leagues to IDs: {[(l.id, l.name, l.country) for l in leagues]}",
+                extra={"query": original_query[:50], "league_ids": [l.id for l in leagues]}
             )
 
         return RequestIntent(

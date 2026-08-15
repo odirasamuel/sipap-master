@@ -1006,26 +1006,26 @@ class MainOrchestrator:
 
             params["date"] = date_start
 
-            # Add league filter if provided
-            # UNIVERSAL MATCHING: Pass FULL user query to Intelligence MCP for context-aware matching
-            # Claude NLU extracts EXACT user phrasing (e.g., "Belarus league", "Spanish LaLiga")
-            # Intelligence MCP uses full query context to disambiguate generic league names
-            # Example: "Belarus league" → matches "Premier League (Belarus)", not "Premier League (England)"
-            league_names = None
+            # Add league filter if provided using ID-FIRST architecture
+            # intent.leagues now contains LeagueEntity objects with API-Football IDs
+            league_ids: list[int] = []
+            raw_league_name = None  # For logging and Intelligence MCP fallback
             if intent.leagues and len(intent.leagues) > 0:
-                # For database query: use sipap-common's find_league_matches() to get canonical names
-                from sipap_common.data import find_league_matches
+                # NEW: Extract API-Football IDs directly from LeagueEntity objects
+                league_ids = [league.id for league in intent.leagues]
+                raw_league_name = intent.leagues[0].name  # For logging/fallback
 
-                raw_league_phrase = intent.leagues[0]  # Claude's raw extraction
-                league_names = find_league_matches(raw_league_phrase)
-
-                # For Intelligence MCP: pass BOTH raw phrase AND full user query
-                params["league_name"] = raw_league_phrase
+                # For Intelligence MCP: pass the league name and full query for context
+                params["league_name"] = raw_league_name
                 params["user_query"] = intent.original_query  # FULL query for context
 
                 self.logger.info(
-                    f"League filter: raw='{raw_league_phrase}', query='{intent.original_query}', canonical={league_names}",
-                    extra={"raw": raw_league_phrase, "query": intent.original_query, "canonical": league_names}
+                    f"League filter using IDs: ids={league_ids}, name='{raw_league_name}'",
+                    extra={
+                        "league_ids": league_ids,
+                        "leagues": [(l.id, l.name, l.country) for l in intent.leagues],
+                        "query": intent.original_query
+                    }
                 )
 
             # Add team filter if provided
@@ -1049,7 +1049,7 @@ class MainOrchestrator:
             if status in ["FT", "AET", "PEN", "ALL"]:
                 self.logger.info(
                     f"Attempting database lookup for finished matches: date={date_start}, "
-                    f"leagues={league_names}, team={team_name}"
+                    f"league_ids={league_ids}, team={team_name}"
                 )
 
                 try:
@@ -1065,8 +1065,8 @@ class MainOrchestrator:
                         "limit": 100,
                     }
 
-                    if league_names:
-                        db_params["league_names"] = league_names
+                    if league_ids:
+                        db_params["league_ids"] = league_ids  # NEW: Use API-Football IDs
 
                     # Call Data MCP's search_fixtures tool
                     db_result = await data_mcp.call_tool("search_fixtures", db_params)
@@ -1130,7 +1130,8 @@ class MainOrchestrator:
                 "count": len(matches),
                 "date": date_start,
                 "status_filter": status,
-                "league_filter": league_names[0] if league_names else None,
+                "league_filter": raw_league_name,  # Updated to use league name from LeagueEntity
+                "league_ids": league_ids,  # NEW: Include API-Football IDs
                 "team_filter": team_name,
                 "data_source": data_source,
             }
@@ -1144,7 +1145,7 @@ class MainOrchestrator:
                 # Generate intelligent suggestions when no matches found
                 from sipap_common.data import extract_country_from_query
 
-                raw_league_phrase = intent.leagues[0] if intent.leagues else None
+                raw_league_phrase = intent.leagues[0].name if intent.leagues else None
 
                 # Extract country from full user query (supports all 77 countries)
                 country_extracted = extract_country_from_query(intent.original_query)
@@ -1687,60 +1688,44 @@ class MainOrchestrator:
                 params["date_to"] = (today + timedelta(days=7)).isoformat()
                 self.logger.debug(f"Using default date range: {params['date_from']} to {params['date_to']}")
 
-            # Extract league/country filters
-            # NEW ARCHITECTURE: Claude NLU extracts raw phrases, we canonicalize for database
-            league_names = []  # Canonical names for database query
-            raw_league_phrase = None  # Raw phrase for Intelligence MCP
+            # Extract league/country filters using ID-FIRST architecture
+            # intent.leagues now contains LeagueEntity objects with API-Football IDs
+            league_ids: list[int] = []  # API-Football IDs for database query
+            raw_league_phrase = None  # Raw phrase for Intelligence MCP fallback
             is_generic_query = False  # Generic "[country] league/leagues" pattern
             country_for_generic = None  # Country if generic pattern detected
 
             if intent.leagues:
-                # Claude extracted raw league phrase (e.g., "Belarus league", "Spanish LaLiga")
-                raw_league_phrase = intent.leagues[0]
+                # NEW: intent.leagues is now list[LeagueEntity] with API-Football IDs
+                # Extract IDs directly - no more string canonicalization needed!
+                league_ids = [league.id for league in intent.leagues]
+                raw_league_phrase = intent.leagues[0].name  # For logging/fallback
 
-                # CRITICAL: Check if this is generic "[country] league/leagues" pattern
-                # Example: "Spanish league" → ALL Spanish leagues
-                # vs "Spanish La Liga" → ONLY La Liga
-                from sipap_common.data import is_generic_country_league_query
+                self.logger.info(
+                    f"Using API-Football IDs from LeagueEntity: {league_ids}",
+                    extra={
+                        "league_ids": league_ids,
+                        "leagues": [(l.id, l.name, l.country) for l in intent.leagues],
+                        "pattern": "id_first_resolution"
+                    }
+                )
 
-                is_generic, generic_country = is_generic_country_league_query(intent.original_query)
-
-                if is_generic:
-                    # Generic pattern detected - user wants ALL leagues for this country
+                # Check if this is a generic country query (e.g., "Spanish league")
+                # If so, we'll have multiple league IDs for that country
+                if len(intent.leagues) > 1 and all(l.country == intent.leagues[0].country for l in intent.leagues):
                     is_generic_query = True
-                    country_for_generic = generic_country
-
-                    # Get ALL leagues for this country
-                    from sipap_common.data import get_leagues_for_country
-
-                    league_names = get_leagues_for_country(generic_country)
-
+                    country_for_generic = intent.leagues[0].country
                     self.logger.info(
-                        f"Generic country query detected: '{raw_league_phrase}' → "
-                        f"ALL {generic_country} leagues ({len(league_names)} competitions)",
-                        extra={
-                            "raw": raw_league_phrase,
-                            "country": generic_country,
-                            "leagues_count": len(league_names),
-                            "pattern": "generic_country_leagues"
-                        }
-                    )
-                else:
-                    # Specific league pattern - use existing canonicalization
-                    from sipap_common.data import find_league_matches
-                    league_names = find_league_matches(raw_league_phrase)
-
-                    self.logger.info(
-                        f"Specific league query: raw='{raw_league_phrase}', canonical={league_names}",
-                        extra={"raw": raw_league_phrase, "canonical": league_names, "pattern": "specific_league"}
+                        f"Generic country query detected: ALL {country_for_generic} leagues ({len(league_ids)} IDs)",
+                        extra={"country": country_for_generic, "league_ids": league_ids, "pattern": "generic_country_leagues"}
                     )
             else:
                 # Fallback: No leagues extracted by NLU
                 self.logger.debug("No league filter applied, querying all leagues")
 
-            # Set league filter params for database query (canonical names)
-            if league_names:
-                params["league_names"] = league_names
+            # Set league filter params for database query (API-Football IDs)
+            if league_ids:
+                params["league_ids"] = league_ids  # NEW: Use API-Football IDs instead of names
 
             # Show upcoming matches (API-Football uses 'NS' for Not Started, not 'scheduled')
             params["status"] = "NS"  # Match API-Football status codes
@@ -1828,8 +1813,8 @@ class MainOrchestrator:
                                 exc_info=True
                             )
                             filter_desc = []
-                            if params.get("league_names"):
-                                filter_desc.append(f"leagues: {', '.join(params['league_names'])}")
+                            if params.get("league_ids"):
+                                filter_desc.append(f"league_ids: {params['league_ids']}")
                             if params.get("date_from"):
                                 filter_desc.append(f"date: {params['date_from']}")
 
@@ -1862,8 +1847,8 @@ class MainOrchestrator:
 
                     # Return database "no fixtures" message if API also fails
                     filter_desc = []
-                    if params.get("league_names"):
-                        filter_desc.append(f"leagues: {', '.join(params['league_names'])}")
+                    if params.get("league_ids"):
+                        filter_desc.append(f"league_ids: {params['league_ids']}")
                     if params.get("date_from"):
                         filter_desc.append(f"date: {params['date_from']}")
 
