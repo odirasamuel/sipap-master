@@ -1813,8 +1813,10 @@ class MainOrchestrator:
                                 exc_info=True
                             )
                             filter_desc = []
-                            if params.get("league_ids"):
-                                filter_desc.append(f"league_ids: {params['league_ids']}")
+                            if intent.leagues:
+                                # Use friendly league names, not internal IDs
+                                league_names = [f"{l.name} ({l.country})" if l.country else l.name for l in intent.leagues]
+                                filter_desc.append(f"leagues: {', '.join(league_names)}")
                             if params.get("date_from"):
                                 filter_desc.append(f"date: {params['date_from']}")
 
@@ -1847,8 +1849,10 @@ class MainOrchestrator:
 
                     # Return database "no fixtures" message if API also fails
                     filter_desc = []
-                    if params.get("league_ids"):
-                        filter_desc.append(f"league_ids: {params['league_ids']}")
+                    if intent.leagues:
+                        # Use friendly league names, not internal IDs
+                        league_names = [f"{l.name} ({l.country})" if l.country else l.name for l in intent.leagues]
+                        filter_desc.append(f"leagues: {', '.join(league_names)}")
                     if params.get("date_from"):
                         filter_desc.append(f"date: {params['date_from']}")
 
