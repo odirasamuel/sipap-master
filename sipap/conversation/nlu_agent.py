@@ -1065,11 +1065,26 @@ CRITICAL: Extract leagues EXACTLY as user says them:
 
         intent_type = intent_map.get(intent_str, "unknown")
 
+        # CRITICAL FIX: Extract leagues from original query
+        # The regex parser doesn't extract leagues, so we need to do it here
+        # This ensures league filtering works for show_fixtures/get_match_results
+        leagues_data = self._extract_leagues_with_context(original_query)
+        leagues = None
+        if leagues_data:
+            # Extract raw phrases from structured data - orchestrator handles canonicalization
+            # We preserve the original query phrasing for better fallback matching
+            leagues = [data.get("raw_text", data["canonical_name"]) for data in leagues_data]
+            self.logger.info(
+                f"Regex fallback extracted leagues: {leagues}",
+                extra={"query": original_query[:50], "leagues": leagues}
+            )
+
         return RequestIntent(
             intent_type=intent_type,  # type: ignore[arg-type]
             confidence=confidence,
             home_team=entities.get("home_team"),
             away_team=entities.get("away_team"),
+            leagues=leagues,  # FIXED: Now includes extracted leagues
             markets=None,  # NOT extracted - system decides best market per fixture
             date_range=(
                 {"start": entities["date"], "end": entities["date"]} if entities.get("date") else None
