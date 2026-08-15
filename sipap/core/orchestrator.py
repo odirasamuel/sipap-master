@@ -1141,10 +1141,33 @@ class MainOrchestrator:
 
             # Format results for user
             if count == 0:
-                message = (
-                    "No matches found matching your criteria. "
-                    "Try a different date or league."
-                )
+                # Generate intelligent suggestions when no matches found
+                from sipap_common.data import extract_country_from_query
+
+                raw_league_phrase = intent.leagues[0] if intent.leagues else None
+
+                # Extract country from full user query (supports all 77 countries)
+                country_extracted = extract_country_from_query(intent.original_query)
+
+                # Use ClarificationAgent to suggest corrections
+                try:
+                    suggestion_message = await self.nlu_agent.clarification_agent.suggest_corrections(
+                        user_query=intent.original_query,
+                        failed_entity="league" if raw_league_phrase else "date",
+                        extracted_value=raw_league_phrase,
+                        country=country_extracted,
+                    )
+                    message = suggestion_message
+                except Exception as e:
+                    self.logger.warning(
+                        f"Suggestion generation failed: {e}. Using simple fallback.",
+                        exc_info=True
+                    )
+                    message = (
+                        "No matches found matching your criteria. "
+                        "Try a different date or league."
+                    )
+
                 return {
                     "message": message,
                     "intent": "get_match_results",
@@ -1761,23 +1784,40 @@ class MainOrchestrator:
                         extra={"count": count}
                     )
 
-                    # If still no fixtures, return helpful message
+                    # If still no fixtures, generate intelligent suggestions
                     if count == 0:
-                        filter_desc = []
-                        if params.get("league_names"):
-                            filter_desc.append(f"leagues: {', '.join(params['league_names'])}")
-                        if params.get("date_from"):
-                            filter_desc.append(f"date: {params['date_from']}")
+                        # Extract country from full user query (supports all 77 countries)
+                        from sipap_common.data import extract_country_from_query
+                        country_extracted = extract_country_from_query(intent.original_query)
 
-                        filter_text = " with " + " and ".join(filter_desc) if filter_desc else ""
+                        # Use ClarificationAgent to suggest corrections
+                        try:
+                            message = await self.nlu_agent.clarification_agent.suggest_corrections(
+                                user_query=intent.original_query,
+                                failed_entity="league" if raw_league_phrase else "fixtures",
+                                extracted_value=raw_league_phrase,
+                                country=country_extracted,
+                            )
+                        except Exception as e:
+                            self.logger.warning(
+                                f"Suggestion generation failed: {e}. Using simple fallback.",
+                                exc_info=True
+                            )
+                            filter_desc = []
+                            if params.get("league_names"):
+                                filter_desc.append(f"leagues: {', '.join(params['league_names'])}")
+                            if params.get("date_from"):
+                                filter_desc.append(f"date: {params['date_from']}")
 
-                        message = (
-                            f"No fixtures found{filter_text}.\n\n"
-                            f"Try:\n"
-                            f"- Different date range\n"
-                            f"- Different leagues/countries\n"
-                            f"- Checking available competitions"
-                        )
+                            filter_text = " with " + " and ".join(filter_desc) if filter_desc else ""
+                            message = (
+                                f"No fixtures found{filter_text}.\n\n"
+                                f"Try:\n"
+                                f"- Different date range\n"
+                                f"- Different leagues/countries\n"
+                                f"- Checking available competitions"
+                            )
+
                         return {
                             "message": message,
                             "intent": "show_fixtures",

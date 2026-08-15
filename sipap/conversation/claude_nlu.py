@@ -316,3 +316,133 @@ Generate the clarification response now:"""
                 exc_info=True
             )
             raise
+
+    async def suggest_corrections(
+        self,
+        user_query: str,
+        failed_entity: str,
+        extracted_value: str | None = None,
+        country_context: str | None = None,
+    ) -> str:
+        """Generate intelligent suggestions when no matches are found.
+
+        Uses Claude to analyze failed queries and suggest corrections based on
+        context, understanding user intent even when exact matches fail.
+
+        Args:
+            user_query: Full user query that failed to match
+            failed_entity: Type of entity that failed ("league", "team", "competition")
+            extracted_value: The extracted value that didn't match (optional)
+            country_context: Detected country context (optional)
+
+        Returns:
+            Natural language suggestion message (< 1600 chars)
+
+        Example:
+            >>> suggestions = await client.suggest_corrections(
+            ...     user_query="Spanish LaLiga fixtures",
+            ...     failed_entity="league",
+            ...     extracted_value="Spanish LaLiga",
+            ...     country_context="Spain"
+            ... )
+            >>> print(suggestions)
+            "No matches found for 'Spanish LaLiga'. Try:
+             • 'La Liga fixtures'
+             • 'Spain fixtures'
+
+             La Liga is Spain's top football division."
+        """
+        # Build context for Claude
+        context_parts = [
+            f"User query: '{user_query}'",
+            f"Failed to match {failed_entity}: '{extracted_value or 'unknown'}'",
+        ]
+
+        if country_context:
+            context_parts.append(f"Detected country: {country_context}")
+
+        context_str = "\n".join(context_parts)
+
+        # System prompt for suggestion generation
+        system_prompt = f"""You are SIPAP's intelligent suggestion assistant for sports data queries.
+
+When users' queries don't match any data, you help them by suggesting correct formats.
+
+SIPAP covers:
+- 380 competitions globally (Premier League, La Liga, Serie A, Bundesliga, etc.)
+- Fixtures, results, predictions for football/soccer
+- European leagues, international tournaments, domestic cups
+
+Common league names:
+- England: Premier League, Championship, FA Cup, League Cup
+- Spain: La Liga (NOT LaLiga), Segunda División, Copa del Rey
+- Germany: Bundesliga, 2. Bundesliga, DFB Pokal
+- Italy: Serie A, Serie B, Coppa Italia
+- France: Ligue 1, Ligue 2, Coupe de France
+
+Your task: Analyze why the query failed and suggest 2-3 correct alternatives.
+
+Guidelines:
+- Keep response under 300 characters (WhatsApp friendly)
+- Provide exact query formats user should try
+- Be friendly and helpful, not technical
+- If country is known, suggest country-specific leagues
+- Use bullet points for clarity
+- Include one brief explanation (1 sentence)
+
+Context:
+{context_str}
+
+Generate a helpful suggestion message."""
+
+        # Prepare Messages API request
+        request_body = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "system": system_prompt,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"The query '{user_query}' didn't match any {failed_entity}. Suggest corrections.",
+                }
+            ],
+            "max_tokens": 500,
+            "temperature": 0.7,
+        }
+
+        try:
+            # Invoke Bedrock
+            response = self.bedrock.invoke_model(
+                modelId=self.model_id,
+                body=json.dumps(request_body),
+            )
+
+            # Parse response
+            response_body = json.loads(response["body"].read())
+
+            # Extract text
+            text_content = ""
+            for content_block in response_body.get("content", []):
+                if content_block.get("type") == "text":
+                    text_content += content_block.get("text", "")
+
+            # Log usage
+            usage = response_body.get("usage", {})
+            self.logger.debug(
+                "Claude suggestion generated",
+                extra={
+                    "input_tokens": usage.get("input_tokens", 0),
+                    "output_tokens": usage.get("output_tokens", 0),
+                    "response_length": len(text_content),
+                }
+            )
+
+            return text_content.strip()
+
+        except ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code", "Unknown")
+            error_message = e.response.get("Error", {}).get("Message", str(e))
+            self.logger.error(
+                f"Bedrock API error in suggest_corrections: {error_code} - {error_message}",
+                exc_info=True
+            )
+            raise

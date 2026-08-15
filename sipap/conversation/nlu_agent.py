@@ -1519,3 +1519,121 @@ class ClarificationAgent:
             ],
             follow_up_context=None,
         )
+
+    async def suggest_corrections(
+        self,
+        user_query: str,
+        failed_entity: str,
+        extracted_value: str | None = None,
+        country: str | None = None,
+    ) -> str:
+        """
+        Generate intelligent suggestions when no matches are found.
+
+        Uses BOTH fuzzy matching (fast, deterministic) AND Claude AI (smart, context-aware)
+        to suggest corrections when user's query doesn't match any data.
+
+        Strategy:
+        1. Try fuzzy matching first (instant, no API cost)
+        2. If fuzzy matching returns good suggestions (score >= 75), use those
+        3. Otherwise, use Claude for intelligent, context-aware suggestions
+
+        Args:
+            user_query: Full user query that failed
+            failed_entity: Type of entity that failed ("league", "team", "competition")
+            extracted_value: The extracted value that didn't match (optional)
+            country: Detected country context (optional, helps narrow suggestions)
+
+        Returns:
+            Formatted suggestion message for WhatsApp
+
+        Example:
+            >>> message = await clarifier.suggest_corrections(
+            ...     user_query="Spanish LaLiga fixtures",
+            ...     failed_entity="league",
+            ...     extracted_value="Spanish LaLiga",
+            ...     country="Spain"
+            ... )
+            >>> print(message)
+            "No matches found for 'Spanish LaLiga'. Did you mean:
+             • La Liga (Spain)
+             • Segunda División (Spain)
+
+             Try: 'La Liga fixtures' or 'Spain fixtures'"
+        """
+        from sipap_common.data import find_similar_leagues
+
+        # Step 1: Try fuzzy matching for leagues
+        if failed_entity == "league" and extracted_value:
+            suggestions = find_similar_leagues(
+                query=extracted_value,
+                country=country,
+                max_suggestions=3,
+            )
+
+            # If we have high-confidence fuzzy matches (score >= 75), use them
+            if suggestions and suggestions[0]["score"] >= 75:
+                self.logger.info(
+                    f"Using fuzzy matching for suggestions: {len(suggestions)} found",
+                    extra={"query": extracted_value, "top_score": suggestions[0]["score"]}
+                )
+
+                # Format suggestions for WhatsApp
+                suggestion_lines = []
+                for s in suggestions[:3]:  # Top 3
+                    country_label = f" ({s['country']})" if s['country'] != "International" else ""
+                    suggestion_lines.append(f"• {s['league']}{country_label}")
+
+                # Build message
+                message_parts = [
+                    f"No matches found for '{extracted_value}'. Did you mean:",
+                    "",
+                    *suggestion_lines,
+                    "",
+                    f"Try: '{suggestions[0]['league']} fixtures'"
+                ]
+
+                if country:
+                    message_parts.append(f" or '{country} fixtures'")
+
+                return "\n".join(message_parts)
+
+        # Step 2: Fallback to Claude for intelligent, context-aware suggestions
+        if self.use_claude and self._claude_client:
+            try:
+                self.logger.info(
+                    "Using Claude for intelligent suggestions",
+                    extra={"query": user_query, "failed_entity": failed_entity}
+                )
+
+                # Call Claude to generate context-aware suggestions
+                claude_message = await self._claude_client.suggest_corrections(
+                    user_query=user_query,
+                    failed_entity=failed_entity,
+                    extracted_value=extracted_value,
+                    country_context=country,
+                )
+
+                return claude_message
+
+            except Exception as e:
+                self.logger.warning(
+                    f"Claude suggestion failed: {e}. Using simple fallback.",
+                    exc_info=True
+                )
+                # Continue to simple fallback below
+
+        # Step 3: Simple fallback when both fuzzy matching and Claude fail
+        entity_label = failed_entity.title()
+        value_label = f" '{extracted_value}'" if extracted_value else ""
+
+        message_parts = [
+            f"No matches found for{value_label}.",
+            "",
+            "Try one of these:",
+            "• Use a different league name (e.g., 'Premier League', 'La Liga')",
+            "• Ask for a specific country (e.g., 'Spain fixtures')",
+            "• Request all available matches (e.g., 'Show me all today's fixtures')",
+        ]
+
+        return "\n".join(message_parts)
