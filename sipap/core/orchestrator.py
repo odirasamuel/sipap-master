@@ -1007,9 +1007,10 @@ class MainOrchestrator:
             params["date"] = date_start
 
             # Add league filter if provided
-            # NEW ARCHITECTURE: Pass raw league phrase directly to Intelligence MCP
-            # Claude NLU now extracts EXACT user phrasing (e.g., "Belarus league", "Spanish LaLiga")
-            # Intelligence MCP handles ALL canonicalization + country extraction in one place
+            # UNIVERSAL MATCHING: Pass FULL user query to Intelligence MCP for context-aware matching
+            # Claude NLU extracts EXACT user phrasing (e.g., "Belarus league", "Spanish LaLiga")
+            # Intelligence MCP uses full query context to disambiguate generic league names
+            # Example: "Belarus league" → matches "Premier League (Belarus)", not "Premier League (England)"
             league_names = None
             if intent.leagues and len(intent.leagues) > 0:
                 # For database query: use sipap-common's find_league_matches() to get canonical names
@@ -1018,12 +1019,13 @@ class MainOrchestrator:
                 raw_league_phrase = intent.leagues[0]  # Claude's raw extraction
                 league_names = find_league_matches(raw_league_phrase)
 
-                # For Intelligence MCP: pass raw phrase as-is (it does its own canonicalization)
+                # For Intelligence MCP: pass BOTH raw phrase AND full user query
                 params["league_name"] = raw_league_phrase
+                params["user_query"] = intent.original_query  # FULL query for context
 
                 self.logger.info(
-                    f"League filter: raw='{raw_league_phrase}', canonical={league_names}",
-                    extra={"raw": raw_league_phrase, "canonical": league_names}
+                    f"League filter: raw='{raw_league_phrase}', query='{intent.original_query}', canonical={league_names}",
+                    extra={"raw": raw_league_phrase, "query": intent.original_query, "canonical": league_names}
                 )
 
             # Add team filter if provided
@@ -1735,14 +1737,15 @@ class MainOrchestrator:
                         "status": "NS",  # Not Started (upcoming fixtures)
                     }
 
-                    # Add league filter if provided (use RAW phrase for Intelligence MCP)
-                    # Intelligence MCP does its own canonicalization with country extraction
+                    # Add league filter if provided (use RAW phrase + FULL query for Intelligence MCP)
+                    # Intelligence MCP uses full query context for intelligent matching
                     if raw_league_phrase:
                         api_params["league_name"] = raw_league_phrase
+                        api_params["user_query"] = intent.original_query  # FULL query for context
 
                     self.logger.info(
                         "Calling Intelligence MCP get_match_results (status=NS for upcoming)",
-                        extra={"params": api_params}
+                        extra={"params": api_params, "user_query": intent.original_query}
                     )
 
                     # Call Intelligence MCP - use get_match_results with status="NS"
