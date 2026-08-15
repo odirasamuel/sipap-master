@@ -382,31 +382,51 @@ class NLUAgent:
 
         # Check for sports/betting keywords to ensure context is relevant
         # CRITICAL: Require domain-specific keywords to avoid false positives
-        sports_keywords = [
+        # Core betting/sports terms (static)
+        core_sports_keywords = {
             "odds", "odd", "prediction", "predictions", "match", "matches",
             "fixture", "fixtures", "bet", "betting", "accumulator", "parlay",
             "selection", "selections", "game", "games", "vs", "against",
             "team", "teams", "league", "leagues", "soccer", "football",
             "basketball", "tennis", "sport", "sports", "score", "scores",
-            "result", "results"  # Match results queries
-        ]
+            "result", "results",
+        }
+
+        # Dynamic league keywords from LEAGUE_REFERENCE (no hardcoding!)
+        try:
+            from sipap_common.data.league_reference import get_sports_context_keywords
+            league_keywords = get_sports_context_keywords()
+        except ImportError:
+            league_keywords = set()  # Fallback if import fails
+
+        # Combine static + dynamic keywords
+        sports_keywords = core_sports_keywords | league_keywords
         has_sports_context = any(keyword in message_lower for keyword in sports_keywords)
 
         # Detect intent type (order matters - check most specific first)
 
+        # Check for explicit fixture requests FIRST (highest priority)
+        fixtures_keywords = ["fixture", "fixtures", "upcoming", "scheduled", "matches today", "games today"]
+        has_fixtures_request = any(keyword in message_lower for keyword in fixtures_keywords)
+
         # Check for match results queries (scores, results of finished/live matches)
         results_keywords = ["score", "scores", "result", "results", "outcome", "outcomes", "final score"]
-        time_indicators = ["yesterday", "today", "last", "previous", "finished", "ended", "final"]
+        # Note: "today" is NOT a results indicator - it's ambiguous and defaults to fixtures
+        past_time_indicators = ["yesterday", "last", "previous", "finished", "ended", "final", "played"]
         has_results_request = any(keyword in message_lower for keyword in results_keywords)
-        has_time_indicator = any(indicator in message_lower for indicator in time_indicators)
+        has_past_time = any(indicator in message_lower for indicator in past_time_indicators)
 
-        # Patterns that strongly indicate get_match_results intent:
+        # FIXTURES FIRST: If user asks for fixtures, it's show_fixtures regardless of other keywords
+        if has_fixtures_request:
+            intent_type = "show_fixtures"
+            confidence = 0.85 if has_sports_context else 0.6
+        # Patterns that indicate get_match_results intent:
         # - "What was the result/score in/of X"
         # - "Show me X results/scores"
-        # - "X results yesterday/today/last week"
+        # - "X results yesterday/last week"
         # - "How did X do"
         # - "Did X win"
-        if has_results_request or has_time_indicator or "how did" in message_lower or "did.*win" in message_lower:
+        elif has_results_request or has_past_time or "how did" in message_lower or "did.*win" in message_lower:
             # Distinguish between:
             # 1. get_match_results: "Show me Arsenal results" (actual match scores)
             # 2. track_results: "How did your predictions do" (tracking our past predictions)
@@ -414,7 +434,7 @@ class NLUAgent:
                 # User asking about OUR predictions (track_results)
                 intent_type = "track_results"
                 confidence = 0.8
-            elif has_results_request or has_time_indicator or "how did" in message_lower:
+            elif has_results_request or has_past_time or "how did" in message_lower:
                 # User asking about actual match results (get_match_results)
                 intent_type = "get_match_results"
                 confidence = 0.8 if has_sports_context else 0.6
@@ -436,12 +456,21 @@ class NLUAgent:
             )
             has_multiple_teams = len(re.findall(r"\bvs\b|\bagainst\b", message_lower)) > 1
 
+            # Check for "[League] today" pattern - defaults to show_fixtures
+            # This catches "Spanish LaLiga today", "Premier League today", etc.
+            has_today = "today" in message_lower
+            has_league_context = has_sports_context  # League names are in sports_keywords
+
             # Fixture queries with no quality/number indicators
             is_fixture_query = any(
                 term in message_lower for term in ["available matches", "fixtures available", "what are the"]
             ) and not has_quality
 
-            if is_fixture_query and not has_number:
+            # "[League] today" without results keywords = show_fixtures (upcoming matches)
+            if has_today and has_league_context and not has_results_request:
+                intent_type = "show_fixtures"
+                confidence = 0.80
+            elif is_fixture_query and not has_number:
                 intent_type = "show_fixtures"
                 confidence = 0.7 if has_sports_context else 0.4
             elif has_number and has_sports_context:
@@ -920,6 +949,12 @@ KEY DISTINCTIONS:
 - "predictions", "bets", "tips", "odds accumulation" = batch_prediction or single_prediction
 - Queries with "played", "happened", "final score" are ALWAYS get_match_results
 
+DEFAULT TO SHOW_FIXTURES:
+- "[League] today" WITHOUT explicit "results" or "scores" = show_fixtures (upcoming matches)
+- "Spanish LaLiga today" = show_fixtures (user wants to see today's fixtures)
+- "Premier League today" = show_fixtures (user wants to see today's fixtures)
+- ONLY use get_match_results when user explicitly asks for "results", "scores", or "what happened"
+
 ENTITY EXTRACTION:
 - leagues: Extract league phrases EXACTLY as user says them, preserving country context
   * If user says "Belarus league" → extract ["Belarus league"]
@@ -1066,10 +1101,10 @@ CRITICAL: Extract leagues EXACTLY as user says them:
                     extra={"query": original_query[:50], "resolved_ids": [l.id for l in leagues]}
                 )
 
-        # Extract teams
-        teams = intent_data.get("teams", {})
-        home_team = teams.get("home")
-        away_team = teams.get("away")
+        # Extract teams (handle null from Claude)
+        teams = intent_data.get("teams") or {}
+        home_team = teams.get("home") if teams else None
+        away_team = teams.get("away") if teams else None
 
         # Extract date range
         date_range = intent_data.get("date_range")
