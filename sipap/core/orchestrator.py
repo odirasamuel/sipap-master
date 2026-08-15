@@ -974,13 +974,8 @@ class MainOrchestrator:
         """
         Handle match results request (live or finished matches).
 
-        Database-First Strategy with API-Football Fallback:
-        1. For LIVE matches → Always use Intelligence MCP (API-Football real-time)
-        2. For finished matches → Try Data MCP (database) first, fallback to Intelligence MCP
-        3. For "ALL" status → Combine database finished + API live matches
-
-        This ensures we use cached historical data when available, saving API quota
-        and providing faster responses, while maintaining real-time accuracy for live matches.
+        DIRECT API-FOOTBALL: Routes directly to Intelligence MCP for real-time data.
+        This bypasses the database layer for reliable, accurate match results.
 
         Args:
             intent: Parsed user intent with filters (date, league, team, status)
@@ -989,151 +984,86 @@ class MainOrchestrator:
         Returns:
             Response dictionary with match results
         """
-        from datetime import UTC, datetime, timedelta
+        from datetime import UTC, datetime
 
         try:
-            # Prepare common parameters
-            params: dict[str, Any] = {}
-
             # Determine date (default to today)
             if intent.date_range:
-                date_start = intent.date_range.get("start")
-                date_end = intent.date_range.get("end", date_start)
+                target_date = intent.date_range.get("start")
             else:
-                today = datetime.now(UTC).date().isoformat()
-                date_start = today
-                date_end = today
+                target_date = datetime.now(UTC).date().isoformat()
 
-            params["date"] = date_start
-
-            # Add league filter if provided using ID-FIRST architecture
-            # intent.leagues now contains LeagueEntity objects with API-Football IDs
+            # Extract league IDs from NLU (ID-FIRST architecture)
             league_ids: list[int] = []
-            raw_league_name = None  # For logging and Intelligence MCP fallback
-            if intent.leagues and len(intent.leagues) > 0:
-                # NEW: Extract API-Football IDs directly from LeagueEntity objects
-                league_ids = [league.id for league in intent.leagues]
-                raw_league_name = intent.leagues[0].name  # For logging/fallback
+            raw_league_name = None
 
-                # For Intelligence MCP: pass the league name and full query for context
-                params["league_name"] = raw_league_name
-                params["user_query"] = intent.original_query  # FULL query for context
+            if intent.leagues and len(intent.leagues) > 0:
+                league_ids = [league.id for league in intent.leagues]
+                raw_league_name = intent.leagues[0].name
 
                 self.logger.info(
-                    f"League filter using IDs: ids={league_ids}, name='{raw_league_name}'",
+                    f"Using API-Football IDs from LeagueEntity: {league_ids}",
                     extra={
                         "league_ids": league_ids,
                         "leagues": [(l.id, l.name, l.country) for l in intent.leagues],
-                        "query": intent.original_query
+                        "pattern": "id_first_resolution"
                     }
                 )
 
-            # Add team filter if provided
+            # Extract team filter if provided
             team_name = None
             if intent.home_team:
                 team_name = intent.home_team
-                params["team_name"] = intent.home_team
             elif intent.away_team:
                 team_name = intent.away_team
-                params["team_name"] = intent.away_team
 
-            # Determine status (live vs finished)
-            # Default to "FT" for results queries (most common case)
-            status = "FT"  # Default: finished matches
+            # Determine status (default to "FT" for finished, can also be "LIVE" or "ALL")
+            status = "FT"
 
-            # STRATEGY: Database-first for historical data, API-Football for live data
-            matches = []
-            data_source = "unknown"
+            # DIRECT TO API-FOOTBALL: Call Intelligence MCP directly
+            # This bypasses the database for reliable, real-time data
+            intelligence_mcp = self.mcp_factory.create("intelligence")
 
-            # Step 1: Try database first for finished matches (historical data)
-            if status in ["FT", "AET", "PEN", "ALL"]:
-                self.logger.info(
-                    f"Attempting database lookup for finished matches: date={date_start}, "
-                    f"league_ids={league_ids}, team={team_name}"
-                )
+            api_params: dict[str, Any] = {
+                "date": target_date,
+                "status": status,
+            }
 
-                try:
-                    # Get Data MCP client
-                    data_mcp = self.mcp_factory.create("data")
+            # Pass league_ids directly (preferred) or fallback to name
+            if league_ids:
+                api_params["league_ids"] = league_ids
+            elif raw_league_name:
+                api_params["league_name"] = raw_league_name
+                api_params["user_query"] = intent.original_query
 
-                    # Query database for finished matches
-                    db_params: dict[str, Any] = {
-                        "date_from": date_start,
-                        "date_to": date_end,
-                        "status": "finished",
-                        "has_odds": False,  # Don't filter by odds for results queries
-                        "limit": 100,
-                    }
+            # Add team filter if provided
+            if team_name:
+                api_params["team_name"] = team_name
 
-                    if league_ids:
-                        db_params["league_ids"] = league_ids  # NEW: Use API-Football IDs
+            self.logger.info(
+                "Calling Intelligence MCP get_match_results (direct API-Football)",
+                extra={"params": api_params}
+            )
 
-                    # Call Data MCP's search_fixtures tool
-                    db_result = await data_mcp.call_tool("search_fixtures", db_params)
-                    db_fixtures = db_result.get("fixtures", [])
+            # Call Intelligence MCP
+            api_result = await intelligence_mcp.call_tool("get_match_results", api_params)
+            matches = api_result.get("matches", [])
 
-                    # Filter by team name if provided (database query doesn't support team filter yet)
-                    if team_name and db_fixtures:
-                        team_lower = team_name.lower()
-                        db_fixtures = [
-                            f for f in db_fixtures
-                            if (team_lower in f.get("home_team", "").lower()
-                                or team_lower in f.get("away_team", "").lower())
-                        ]
+            self.logger.info(
+                f"Intelligence MCP returned {len(matches)} matches",
+                extra={"count": len(matches), "league_ids": league_ids}
+            )
 
-                    # Check if database has results with scores
-                    finished_matches_with_scores = [
-                        f for f in db_fixtures
-                        if f.get("home_score") is not None and f.get("away_score") is not None
-                    ]
-
-                    if finished_matches_with_scores:
-                        self.logger.info(
-                            f"Database hit: Found {len(finished_matches_with_scores)} finished matches with scores"
-                        )
-                        matches.extend(self._convert_db_fixtures_to_api_format(finished_matches_with_scores))
-                        data_source = "database"
-                    else:
-                        self.logger.info(
-                            f"Database miss: No finished matches with scores found (total fixtures: {len(db_fixtures)})"
-                        )
-
-                except Exception as e:
-                    self.logger.warning(
-                        f"Database lookup failed, will fallback to API-Football: {e}"
-                    )
-
-            # Step 2: Fallback to API-Football if no database results or for live matches
-            if not matches or status == "LIVE":
-                self.logger.info(
-                    f"Using API-Football fallback (live data or database miss): status={status}"
-                )
-
-                # Get Intelligence MCP client
-                intelligence_mcp = self.mcp_factory.create("intelligence")
-
-                # Use original params with status
-                params["status"] = status
-
-                # Call Intelligence MCP tool (API-Football real-time)
-                api_result = await intelligence_mcp.call_tool("get_match_results", params)
-                api_matches = api_result.get("matches", [])
-
-                if api_matches:
-                    self.logger.info(f"API-Football returned {len(api_matches)} matches")
-                    matches.extend(api_matches)
-                    data_source = "api-football" if not matches else "hybrid"
-
-            # Build combined result
+            # Build result
             result = {
                 "matches": matches,
                 "count": len(matches),
-                "date": date_start,
+                "date": target_date,
                 "status_filter": status,
-                "league_filter": raw_league_name,  # Updated to use league name from LeagueEntity
-                "league_ids": league_ids,  # NEW: Include API-Football IDs
+                "league_filter": raw_league_name,
+                "league_ids": league_ids,
                 "team_filter": team_name,
-                "data_source": data_source,
+                "data_source": "api-football",
             }
 
             # Extract matches from result
@@ -1440,7 +1370,6 @@ class MainOrchestrator:
         fixtures: list[dict[str, Any]],
         count: int,
         filters_applied: dict[str, Any],
-        params: dict[str, Any],
         max_length: int = 1600,
     ) -> str:
         """Format fixtures in condensed format with automatic pagination.
@@ -1454,7 +1383,6 @@ class MainOrchestrator:
             fixtures: List of fixture dictionaries
             count: Total count of fixtures
             filters_applied: Filters that were applied
-            params: Query parameters
             max_length: Maximum message length (default 1600 chars for WhatsApp)
 
         Returns:
@@ -1652,8 +1580,8 @@ class MainOrchestrator:
         """
         Handle show fixtures request (list upcoming matches).
 
-        Calls Data MCP's search_fixtures tool to fetch scheduled matches
-        matching the user's filters (date, league, country).
+        DIRECT API-FOOTBALL: Routes directly to Intelligence MCP for real-time data.
+        This bypasses the database layer for reliable, accurate fixture data.
 
         Args:
             intent: Parsed user intent with filters (date_range, leagues, extracted_entities)
@@ -1670,36 +1598,22 @@ class MainOrchestrator:
         )
 
         try:
-            # Get Data MCP client
-            data_mcp = self.mcp_factory.create("data")
-
-            # Prepare parameters for search_fixtures tool
-            params: dict[str, Any] = {}
-
-            # Extract date range (default to next 7 days)
+            # Extract date (default to today)
             if intent.date_range:
-                params["date_from"] = intent.date_range.get("start")
-                params["date_to"] = intent.date_range.get("end", intent.date_range.get("start"))
-                self.logger.debug(f"Using date range from intent: {params['date_from']} to {params['date_to']}")
+                target_date = intent.date_range.get("start")
+                self.logger.debug(f"Using date from intent: {target_date}")
             else:
-                # Default to next 7 days
-                today = datetime.now(UTC).date()
-                params["date_from"] = today.isoformat()
-                params["date_to"] = (today + timedelta(days=7)).isoformat()
-                self.logger.debug(f"Using default date range: {params['date_from']} to {params['date_to']}")
+                target_date = datetime.now(UTC).date().isoformat()
+                self.logger.debug(f"Using default date (today): {target_date}")
 
-            # Extract league/country filters using ID-FIRST architecture
-            # intent.leagues now contains LeagueEntity objects with API-Football IDs
-            league_ids: list[int] = []  # API-Football IDs for database query
-            raw_league_phrase = None  # Raw phrase for Intelligence MCP fallback
-            is_generic_query = False  # Generic "[country] league/leagues" pattern
-            country_for_generic = None  # Country if generic pattern detected
+            # Extract league IDs from NLU (ID-FIRST architecture)
+            league_ids: list[int] = []
+            raw_league_phrase = None
+            country_for_generic = None
 
             if intent.leagues:
-                # NEW: intent.leagues is now list[LeagueEntity] with API-Football IDs
-                # Extract IDs directly - no more string canonicalization needed!
                 league_ids = [league.id for league in intent.leagues]
-                raw_league_phrase = intent.leagues[0].name  # For logging/fallback
+                raw_league_phrase = intent.leagues[0].name
 
                 self.logger.info(
                     f"Using API-Football IDs from LeagueEntity: {league_ids}",
@@ -1710,154 +1624,86 @@ class MainOrchestrator:
                     }
                 )
 
-                # Check if this is a generic country query (e.g., "Spanish league")
-                # If so, we'll have multiple league IDs for that country
+                # Check if generic country query
                 if len(intent.leagues) > 1 and all(l.country == intent.leagues[0].country for l in intent.leagues):
-                    is_generic_query = True
                     country_for_generic = intent.leagues[0].country
                     self.logger.info(
-                        f"Generic country query detected: ALL {country_for_generic} leagues ({len(league_ids)} IDs)",
-                        extra={"country": country_for_generic, "league_ids": league_ids, "pattern": "generic_country_leagues"}
+                        f"Generic country query: ALL {country_for_generic} leagues ({len(league_ids)} IDs)"
                     )
             else:
-                # Fallback: No leagues extracted by NLU
-                self.logger.debug("No league filter applied, querying all leagues")
+                self.logger.debug("No league filter applied")
 
-            # Set league filter params for database query (API-Football IDs)
+            # DIRECT TO API-FOOTBALL: Call Intelligence MCP directly
+            # This bypasses the database for reliable, real-time data
+            intelligence_mcp = self.mcp_factory.create("intelligence")
+
+            api_params: dict[str, Any] = {
+                "date": target_date,
+                "status": "NS",  # Not Started (upcoming fixtures)
+            }
+
+            # Pass league_ids directly (preferred) or fallback to name
             if league_ids:
-                params["league_ids"] = league_ids  # NEW: Use API-Football IDs instead of names
-
-            # Show upcoming matches (API-Football uses 'NS' for Not Started, not 'scheduled')
-            params["status"] = "NS"  # Match API-Football status codes
-            params["has_odds"] = False  # Don't filter by odds - show all fixtures
-            params["limit"] = 50  # Limit to 50 fixtures
+                api_params["league_ids"] = league_ids
+            elif raw_league_phrase:
+                api_params["league_name"] = raw_league_phrase
+                api_params["user_query"] = intent.original_query
 
             self.logger.info(
-                "Calling Data MCP search_fixtures",
-                extra={"params": params}
+                "Calling Intelligence MCP get_match_results (direct API-Football)",
+                extra={"params": api_params}
             )
 
-            # Call Data MCP tool
-            result = await data_mcp.call_tool("search_fixtures", params)
+            # Call Intelligence MCP
+            result = await intelligence_mcp.call_tool("get_match_results", api_params)
 
             # Extract fixtures from result
-            fixtures = result.get("fixtures", [])
-            count = result.get("count", 0)
-            filters_applied = result.get("filters_applied", {})
+            fixtures = result.get("matches", [])
+            count = len(fixtures)
 
             self.logger.info(
-                f"Data MCP returned {count} fixtures",
-                extra={"count": count, "filters": filters_applied}
+                f"Intelligence MCP returned {count} fixtures",
+                extra={"count": count, "league_ids": league_ids}
             )
 
-            # FALLBACK: If database has no fixtures, try Intelligence MCP (API-Football)
-            # This ensures we get real-time data for today's matches
+            # Build filters_applied for formatting
+            filters_applied = {
+                "date": target_date,
+                "league_ids": league_ids if league_ids else None,
+                "league_name": raw_league_phrase,
+                "status": "NS",  # Not Started (upcoming)
+                "data_source": "api-football"
+            }
+
+            # If no fixtures found, generate suggestions
             if count == 0:
-                self.logger.info(
-                    "Database returned no fixtures, trying Intelligence MCP (API-Football) for real-time data"
-                )
+                # Extract country for suggestions
+                country_extracted = country_for_generic
+                if not country_extracted and intent.leagues:
+                    country_extracted = intent.leagues[0].country
 
+                # Use ClarificationAgent to suggest corrections
                 try:
-                    # Get Intelligence MCP client
-                    intelligence_mcp = self.mcp_factory.create("intelligence")
-
-                    # Prepare API-Football parameters for get_match_results
-                    # NOTE: Intelligence MCP's get_match_results accepts "date" (not date_from/date_to)
-                    # and status can be "NS" (Not Started) for upcoming fixtures
-                    api_params: dict[str, Any] = {
-                        "date": params.get("date_from"),  # Use start date only
-                        "status": "NS",  # Not Started (upcoming fixtures)
-                    }
-
-                    # Add league filter if provided (use RAW phrase + FULL query for Intelligence MCP)
-                    # Intelligence MCP uses full query context for intelligent matching
-                    if raw_league_phrase:
-                        api_params["league_name"] = raw_league_phrase
-                        api_params["user_query"] = intent.original_query  # FULL query for context
-
-                    self.logger.info(
-                        "Calling Intelligence MCP get_match_results (status=NS for upcoming)",
-                        extra={"params": api_params, "user_query": intent.original_query}
+                    message = await self.nlu_agent.clarification_agent.suggest_corrections(
+                        user_query=intent.original_query,
+                        failed_entity="league" if raw_league_phrase else "fixtures",
+                        extracted_value=raw_league_phrase,
+                        country=country_extracted,
                     )
-
-                    # Call Intelligence MCP - use get_match_results with status="NS"
-                    api_result = await intelligence_mcp.call_tool("get_match_results", api_params)
-
-                    # NOTE: get_match_results returns "matches" not "fixtures"
-                    # Convert to fixtures format for consistency
-                    fixtures = api_result.get("matches", [])
-                    count = len(fixtures)
-
-                    self.logger.info(
-                        f"Intelligence MCP (API-Football) returned {count} upcoming fixtures",
-                        extra={"count": count}
+                except Exception as e:
+                    self.logger.warning(
+                        f"Suggestion generation failed: {e}. Using simple fallback.",
+                        exc_info=True
                     )
-
-                    # If still no fixtures, generate intelligent suggestions
-                    if count == 0:
-                        # Extract country from full user query (supports all 77 countries)
-                        from sipap_common.data import extract_country_from_query
-                        country_extracted = extract_country_from_query(intent.original_query)
-
-                        # Use ClarificationAgent to suggest corrections
-                        try:
-                            message = await self.nlu_agent.clarification_agent.suggest_corrections(
-                                user_query=intent.original_query,
-                                failed_entity="league" if raw_league_phrase else "fixtures",
-                                extracted_value=raw_league_phrase,
-                                country=country_extracted,
-                            )
-                        except Exception as e:
-                            self.logger.warning(
-                                f"Suggestion generation failed: {e}. Using simple fallback.",
-                                exc_info=True
-                            )
-                            filter_desc = []
-                            if intent.leagues:
-                                # Use friendly league names, not internal IDs
-                                league_names = [f"{l.name} ({l.country})" if l.country else l.name for l in intent.leagues]
-                                filter_desc.append(f"leagues: {', '.join(league_names)}")
-                            if params.get("date_from"):
-                                filter_desc.append(f"date: {params['date_from']}")
-
-                            filter_text = " with " + " and ".join(filter_desc) if filter_desc else ""
-                            message = (
-                                f"No fixtures found{filter_text}.\n\n"
-                                f"Try:\n"
-                                f"- Different date range\n"
-                                f"- Different leagues/countries\n"
-                                f"- Checking available competitions"
-                            )
-
-                        return {
-                            "message": message,
-                            "intent": "show_fixtures",
-                            "data": api_result,
-                            "error": None,
-                        }
-
-                    # Update filters_applied to reflect we used API-Football
-                    filters_applied = {
-                        "date": api_params.get("date"),
-                        "league_name": api_params.get("league_name"),
-                        "status": "NS",  # Not Started (upcoming)
-                        "data_source": "api-football"
-                    }
-
-                except Exception as api_error:
-                    self.logger.error(f"Intelligence MCP fallback failed: {api_error}", exc_info=True)
-
-                    # Return database "no fixtures" message if API also fails
                     filter_desc = []
                     if intent.leagues:
                         # Use friendly league names, not internal IDs
                         league_names = [f"{l.name} ({l.country})" if l.country else l.name for l in intent.leagues]
                         filter_desc.append(f"leagues: {', '.join(league_names)}")
-                    if params.get("date_from"):
-                        filter_desc.append(f"date: {params['date_from']}")
+                    if target_date:
+                        filter_desc.append(f"date: {target_date}")
 
                     filter_text = " with " + " and ".join(filter_desc) if filter_desc else ""
-
                     message = (
                         f"No fixtures found{filter_text}.\n\n"
                         f"Try:\n"
@@ -1865,19 +1711,19 @@ class MainOrchestrator:
                         f"- Different leagues/countries\n"
                         f"- Checking available competitions"
                     )
-                    return {
-                        "message": message,
-                        "intent": "show_fixtures",
-                        "data": result,
-                        "error": None,
-                    }
+
+                return {
+                    "message": message,
+                    "intent": "show_fixtures",
+                    "data": result,
+                    "error": None,
+                }
 
             # Format fixture listings for WhatsApp (condensed format with pagination)
             message = self._format_fixtures_with_pagination(
                 fixtures=fixtures,
                 count=count,
                 filters_applied=filters_applied,
-                params=params
             )
 
             return {
