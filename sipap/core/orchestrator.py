@@ -1689,11 +1689,12 @@ class MainOrchestrator:
                     # Get Intelligence MCP client
                     intelligence_mcp = self.mcp_factory.create("intelligence")
 
-                    # Prepare API-Football parameters
+                    # Prepare API-Football parameters for get_match_results
+                    # NOTE: Intelligence MCP's get_match_results accepts "date" (not date_from/date_to)
+                    # and status can be "NS" (Not Started) for upcoming fixtures
                     api_params: dict[str, Any] = {
-                        "date_from": params.get("date_from"),
-                        "date_to": params.get("date_to"),
-                        "status": "NS",  # Not Started
+                        "date": params.get("date_from"),  # Use start date only
+                        "status": "NS",  # Not Started (upcoming fixtures)
                     }
 
                     # Add league filter if provided (use first league name)
@@ -1701,17 +1702,20 @@ class MainOrchestrator:
                         api_params["league_name"] = league_names[0]
 
                     self.logger.info(
-                        "Calling Intelligence MCP get_upcoming_fixtures",
+                        "Calling Intelligence MCP get_match_results (status=NS for upcoming)",
                         extra={"params": api_params}
                     )
 
-                    # Call Intelligence MCP
-                    api_result = await intelligence_mcp.call_tool("get_upcoming_fixtures", api_params)
-                    fixtures = api_result.get("fixtures", [])
+                    # Call Intelligence MCP - use get_match_results with status="NS"
+                    api_result = await intelligence_mcp.call_tool("get_match_results", api_params)
+
+                    # NOTE: get_match_results returns "matches" not "fixtures"
+                    # Convert to fixtures format for consistency
+                    fixtures = api_result.get("matches", [])
                     count = len(fixtures)
 
                     self.logger.info(
-                        f"Intelligence MCP (API-Football) returned {count} fixtures",
+                        f"Intelligence MCP (API-Football) returned {count} upcoming fixtures",
                         extra={"count": count}
                     )
 
@@ -1741,9 +1745,9 @@ class MainOrchestrator:
 
                     # Update filters_applied to reflect we used API-Football
                     filters_applied = {
-                        "date_from": api_params.get("date_from"),
-                        "date_to": api_params.get("date_to"),
+                        "date": api_params.get("date"),
                         "league_name": api_params.get("league_name"),
+                        "status": "NS",  # Not Started (upcoming)
                         "data_source": "api-football"
                     }
 
