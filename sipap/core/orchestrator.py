@@ -790,28 +790,61 @@ class MainOrchestrator:
 
             filters_str = "\n".join(filters_text) if filters_text else "No filters applied"
 
-            # Build selections text (condensed format)
-            # Format: "1. Arsenal v Chelsea - Home @2.5 (65%, +8%) [PL]"
+            # Build selections text showing TOP 3 markets per fixture
+            # Format:
+            # 1. Arsenal v Chelsea [PL]
+            #    ⭐ BTTS Yes @1.85 (72%, +8%)
+            #    2️⃣ Home @2.50 (65%, +5%)
+            #    3️⃣ Over 2.5 @1.95 (68%, +3%)
             selections_text = []
             for i, selection in enumerate(result["selections"], 1):
                 fixture = selection["fixture"]
-                home = fixture.get("home_team", {}).get("name", "Home")
-                away = fixture.get("away_team", {}).get("name", "Away")
-                league = fixture.get("league", {}).get("name", "")
+                home = fixture.get("home_team", "Home")
+                away = fixture.get("away_team", "Away")
+                # Handle both dict and string formats for team names
+                if isinstance(home, dict):
+                    home = home.get("name", "Home")
+                if isinstance(away, dict):
+                    away = away.get("name", "Away")
 
-                outcome = selection["best_outcome"]
-                odd = selection["bookmaker_odd"]
-                conf = selection["confidence"]
-                ev = selection["ev"]
+                league = fixture.get("league", "")
+                if isinstance(league, dict):
+                    league = league.get("name", "")
 
                 # Abbreviate league
                 league_abbrev = self._abbreviate_league(league)
+                league_tag = f" [{league_abbrev}]" if league_abbrev else ""
 
-                # Condensed format
-                line = f"{i}. {home} v {away} - {outcome} @{odd:.1f} ({conf:.0%}, {ev:+.0%})"
-                if league_abbrev:
-                    line += f" [{league_abbrev}]"
-                selections_text.append(line)
+                # Fixture header line
+                fixture_line = f"{i}. {home} v {away}{league_tag}"
+                selections_text.append(fixture_line)
+
+                # Get top markets (new structure) or fall back to legacy
+                top_markets = selection.get("top_markets", [])
+
+                if top_markets:
+                    # NEW FORMAT: Show top 3 markets with best highlighted
+                    rank_icons = ["⭐", "2️⃣", "3️⃣"]
+                    for j, market in enumerate(top_markets[:3]):
+                        icon = rank_icons[j] if j < len(rank_icons) else f"{j+1}."
+                        outcome = market.get("best_outcome", "?")
+                        odd = market.get("bookmaker_odd", 0)
+                        conf = market.get("confidence", 0)
+                        ev = market.get("ev", 0)
+                        market_name = market.get("market_name", market.get("market_code", ""))
+
+                        # Format: "   ⭐ BTTS Yes @1.85 (72%, +8%)"
+                        market_line = f"   {icon} {outcome} @{odd:.2f} ({conf:.0%}, {ev:+.0%})"
+                        selections_text.append(market_line)
+                else:
+                    # LEGACY FORMAT: Single best market (backward compatibility)
+                    outcome = selection.get("best_outcome", "?")
+                    odd = selection.get("bookmaker_odd", 0)
+                    conf = selection.get("confidence", 0)
+                    ev = selection.get("ev", 0)
+
+                    market_line = f"   ⭐ {outcome} @{odd:.2f} ({conf:.0%}, {ev:+.0%})"
+                    selections_text.append(market_line)
 
             selections_str = "\n".join(selections_text) if selections_text else "No selections"
 
