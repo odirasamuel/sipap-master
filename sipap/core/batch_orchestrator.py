@@ -16,28 +16,37 @@ Example: "20 odds" means accumulate fixtures until sum(bookmaker_odds) >= 20.0
 Pattern adapted from Sentinel's batch processing patterns.
 """
 
+import asyncio
 import json
 import logging
 import os
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+from sipap_common.cache.redis_adapter import RedisCache
+from sipap_common.logging import get_logger
+
 from sipap.conversation import RequestIntent
 from sipap.core.retry import PermanentError, RetryExhausted, retry_with_backoff
 from sipap.sports.soccer.markets import get_all_markets
-from sipap_common.cache.redis_adapter import RedisCache
-from sipap_common.logging import get_logger
 
 
 class BatchOrchestrator:
     """
     Orchestrates batch prediction requests with accumulated odds logic.
 
+    BATCH PROCESSING (NEW):
+    - Processes fixtures in batches of 20 at a time for efficiency
+    - Evaluates all 44 markets per fixture
+    - Returns TOP 3 markets per fixture, with #1 highlighted as best option
+    - Caches results for 24 hours to avoid redundant predictions
+
     Responsibilities:
     - Query fixtures with filters (leagues, dates, status)
-    - Predict iteratively (not all at once for efficiency)
-    - Accumulate bookmaker odds until target reached
+    - Process in batches of 20 matches for optimal throughput
+    - Evaluate all 44 markets and select top 3 by probability
     - Apply quality gates (confidence + EV thresholds)
+    - Cache results for 24 hours
     - Return selections with accumulated_sum >= target
 
     Example:
@@ -72,6 +81,11 @@ class BatchOrchestrator:
         self.orchestrator = main_orchestrator
         self.mcp_factory = mcp_factory
         self.logger = logger or get_logger(__name__)
+
+        # Batch processing configuration
+        self.BATCH_SIZE = 20  # Process 20 matches at a time
+        self.TOP_MARKETS = 3  # Return top 3 markets per fixture
+        self.CACHE_TTL_HOURS = 24  # Cache predictions for 24 hours
 
         # Quality threshold mappings
         # These map user quality terms to confidence + EV thresholds
@@ -111,9 +125,28 @@ class BatchOrchestrator:
         log_mode = "DEBUG mode enabled" if self.debug_enabled else "INFO mode (summary only)"
         self.logger.info(f"BatchOrchestrator initialized - {log_mode}")
 
+    def _calculate_ttl_24_hours(self) -> int:
+        """
+        Calculate TTL for 24-hour caching of prediction results.
+
+        This ensures predictions are cached for exactly 24 hours, allowing
+        subsequent requests within that window to reuse cached results.
+
+        Returns:
+            86400 seconds (24 hours)
+
+        Examples:
+            >>> ttl = self._calculate_ttl_24_hours()
+            >>> # Returns 86400 (24 hours in seconds)
+        """
+        # 24 hours = 24 * 60 * 60 = 86400 seconds
+        return self.CACHE_TTL_HOURS * 60 * 60
+
     def _calculate_ttl_until_end_of_day(self) -> int:
         """
         Calculate TTL in seconds until end of current day (midnight UTC).
+
+        DEPRECATED: Use _calculate_ttl_24_hours() instead for 24-hour caching.
 
         Returns:
             Number of seconds until 23:59:59 UTC today
@@ -129,6 +162,119 @@ class BatchOrchestrator:
 
         # Ensure TTL is at least 60 seconds (avoid 0 or negative TTL)
         return max(ttl_seconds, 60)
+
+    async def _process_fixture_batch(
+        self,
+        fixtures: list[dict[str, Any]],
+        user_id: str,
+        thresholds: dict[str, float],
+    ) -> tuple[list[dict[str, Any]], int]:
+        """
+        Process a batch of fixtures concurrently (up to BATCH_SIZE at a time).
+
+        This processes fixtures in parallel for efficiency while maintaining
+        quality gates for each individual fixture. Each fixture gets its
+        top 3 markets evaluated and the best one selected.
+
+        Args:
+            fixtures: List of fixture dictionaries to process
+            user_id: User identifier
+            thresholds: Quality thresholds for confidence and EV
+
+        Returns:
+            Tuple of (accepted_selections, failed_count)
+            - accepted_selections: Fixtures that passed quality gates with top 3 markets
+            - failed_count: Number of fixtures that failed prediction
+
+        Example:
+            >>> selections, failures = await self._process_fixture_batch(
+            ...     fixtures[:20], user_id, thresholds
+            ... )
+            >>> print(f"Accepted: {len(selections)}, Failed: {failures}")
+        """
+        if not fixtures:
+            return [], 0
+
+        self.logger.info(
+            f"🔄 Processing batch of {len(fixtures)} fixtures concurrently"
+        )
+
+        # Process each fixture and collect results
+        accepted: list[dict[str, Any]] = []
+        failed_count = 0
+
+        # Create prediction tasks for all fixtures in this batch
+        async def predict_single(fixture: dict[str, Any]) -> tuple[dict[str, Any] | None, bool]:
+            """
+            Predict fixture and apply quality gates.
+
+            Returns:
+                Tuple of (analysis_result, is_failure)
+                - analysis_result: The prediction analysis or None if rejected/skipped
+                - is_failure: True if prediction failed (error), False otherwise
+            """
+            # Skip fixtures without odds
+            has_odds = (
+                fixture.get("best_home_odds") is not None
+                or fixture.get("best_draw_odds") is not None
+                or fixture.get("best_away_odds") is not None
+            )
+            if not has_odds:
+                if self.debug_enabled:
+                    self.logger.debug(
+                        f"Skipping fixture {fixture.get('id')} ({fixture.get('home_team')} vs {fixture.get('away_team')}) - no odds"
+                    )
+                return None, False
+
+            try:
+                analysis = await self._predict_fixture(fixture, user_id)
+
+                # Apply quality gates using the BEST market
+                best_market = analysis.get("best_market", {})
+                confidence = best_market.get("confidence", analysis.get("confidence", 0))
+                ev = best_market.get("ev", analysis.get("ev", 0))
+
+                if (
+                    confidence >= thresholds["min_confidence"]
+                    and ev >= thresholds["min_ev"]
+                ):
+                    return analysis, False
+                else:
+                    if self.debug_enabled:
+                        self.logger.debug(
+                            f"❌ Rejected {fixture.get('home_team')} vs {fixture.get('away_team')} - "
+                            f"conf={confidence:.2f} < {thresholds['min_confidence']}, "
+                            f"ev={ev:.2f} < {thresholds['min_ev']}"
+                        )
+                    return None, False
+
+            except Exception as e:
+                self.logger.error(
+                    f"Prediction failed for fixture {fixture.get('id')}: {e}",
+                    exc_info=True,
+                )
+                return None, True  # Mark as failure
+
+        # Run all predictions concurrently
+        results = await asyncio.gather(
+            *[predict_single(f) for f in fixtures],
+            return_exceptions=False  # Don't return exceptions, let predict_single handle them
+        )
+
+        # Process results
+        for result_analysis, is_failure in results:
+            if is_failure:
+                failed_count += 1
+            elif result_analysis is not None:
+                accepted.append(result_analysis)
+
+        self.logger.info(
+            f"✅ Batch complete: {len(accepted)} accepted, "
+            f"{len(fixtures) - len(accepted) - failed_count} rejected, "
+            f"{failed_count} failed"
+        )
+
+        return accepted, failed_count
 
     async def process_batch_request(
         self,
@@ -252,67 +398,57 @@ class BatchOrchestrator:
 
         self.logger.info(f"Found {len(fixtures)} fixtures matching filters")
 
-        # Step 3: Predict iteratively and accumulate until target reached
+        # Step 3: Process fixtures in BATCHES OF 20 for efficiency
         # NOTE: Market selection happens INSIDE _predict_fixture now
-        # The system evaluates ALL markets and picks the best one per fixture
+        # The system evaluates ALL markets and picks top 3 per fixture
         accumulated_sum = 0.0
         selections = []
         failed_predictions = 0
+        batch_number = 0
 
-        for fixture in fixtures:
-            # Stop if target reached
+        # Process in batches of BATCH_SIZE (20 by default)
+        for i in range(0, len(fixtures), self.BATCH_SIZE):
+            batch_number += 1
+            batch = fixtures[i:i + self.BATCH_SIZE]
+
+            self.logger.info(
+                f"📦 Processing batch {batch_number} ({len(batch)} fixtures, "
+                f"accumulated: {accumulated_sum:.1f}/{target})"
+            )
+
+            # Process this batch concurrently
+            batch_selections, batch_failures = await self._process_fixture_batch(
+                batch, user_id, thresholds
+            )
+
+            failed_predictions += batch_failures
+
+            # Add accepted selections and accumulate odds
+            for analysis in batch_selections:
+                # Use the best market's bookmaker odd for accumulation
+                best_market = analysis.get("best_market", {})
+                bookmaker_odd = best_market.get("bookmaker_odd", analysis.get("bookmaker_odd", 0))
+
+                selections.append(analysis)
+                accumulated_sum += bookmaker_odd
+
+                self.logger.info(
+                    f"✅ Added: {analysis['fixture'].get('home_team')} vs {analysis['fixture'].get('away_team')} - "
+                    f"{best_market.get('market_code', analysis.get('market_code'))} @ {bookmaker_odd} "
+                    f"(accumulated: {accumulated_sum:.1f}/{target})"
+                )
+
+                # Stop if target reached
+                if accumulated_sum >= target:
+                    self.logger.info(
+                        f"🎯 Target reached! {accumulated_sum:.1f} >= {target} "
+                        f"after {batch_number} batch(es)"
+                    )
+                    break
+
+            # Stop processing more batches if target reached
             if accumulated_sum >= target:
                 break
-
-            # Skip fixtures without odds data
-            # Odds come as separate columns: best_home_odds, best_draw_odds, best_away_odds
-            has_odds = (
-                fixture.get("best_home_odds") is not None
-                or fixture.get("best_draw_odds") is not None
-                or fixture.get("best_away_odds") is not None
-            )
-            if not has_odds:
-                self.logger.info(
-                    f"Skipping fixture {fixture.get('id')} ({fixture.get('home_team')} vs {fixture.get('away_team')}) - no odds data available"
-                )
-                continue
-
-            # Predict fixture - evaluates ALL markets, picks best EV
-            try:
-                analysis = await self._predict_fixture(fixture, user_id)
-
-                # Apply quality gates
-                if (
-                    analysis["confidence"] >= thresholds["min_confidence"]
-                    and analysis["ev"] >= thresholds["min_ev"]
-                ):
-                    # Add to selections
-                    selections.append(analysis)
-                    accumulated_sum += analysis["bookmaker_odd"]
-
-                    # Log acceptance (INFO for visibility)
-                    if self.debug_enabled:
-                        self.logger.debug(
-                            f"✅ Added: {fixture.get('home_team')} vs {fixture.get('away_team')} - "
-                            f"{analysis['market_code']} @ {analysis['bookmaker_odd']} "
-                            f"(accumulated: {accumulated_sum:.1f}/{target})"
-                        )
-                else:
-                    # Log rejection only if DEBUG enabled (reduces noise)
-                    if self.debug_enabled:
-                        self.logger.debug(
-                            f"❌ Rejected: {fixture.get('home_team')} vs {fixture.get('away_team')} - "
-                            f"conf={analysis['confidence']:.2f} < {thresholds['min_confidence']}, "
-                            f"ev={analysis['ev']:.2f} < {thresholds['min_ev']}"
-                        )
-
-            except Exception as e:
-                self.logger.error(
-                    f"Prediction failed for fixture {fixture.get('id')}: {e}",
-                    exc_info=True,
-                )
-                failed_predictions += 1
-                continue
 
         # Step 5: Build result
         warning = None
@@ -440,65 +576,70 @@ class BatchOrchestrator:
                 f"Found {len(fixtures)} fixtures for {current_date.isoformat()}"
             )
 
-            # Process each fixture for this day
-            for fixture in fixtures:
-                fixture_id = fixture.get("id")
+            # Filter out already processed fixtures
+            new_fixtures = [
+                f for f in fixtures
+                if f.get("id") not in all_fixtures_processed
+            ]
 
-                # Skip if already processed (shouldn't happen but safety check)
-                if fixture_id in all_fixtures_processed:
-                    continue
-                all_fixtures_processed.add(fixture_id)
+            # Track all fixture IDs from this day
+            for f in new_fixtures:
+                all_fixtures_processed.add(f.get("id"))
 
-                # Stop if target reached
+            if not new_fixtures:
+                self.logger.info(
+                    f"All fixtures for {current_date.isoformat()} already processed, expanding to next day"
+                )
+                days_expanded += 1
+                continue
+
+            # Process fixtures in BATCHES OF 20 for this day
+            batch_number = 0
+            for batch_start in range(0, len(new_fixtures), self.BATCH_SIZE):
+                batch_number += 1
+                batch = new_fixtures[batch_start:batch_start + self.BATCH_SIZE]
+
+                self.logger.info(
+                    f"📦 Day {day_offset + 1}: Processing batch {batch_number} ({len(batch)} fixtures, "
+                    f"accumulated: {accumulated_sum:.1f}/{target})"
+                )
+
+                # Process this batch concurrently
+                batch_selections, batch_failures = await self._process_fixture_batch(
+                    batch, user_id, thresholds
+                )
+
+                failed_predictions += batch_failures
+
+                # Add accepted selections and accumulate odds
+                for analysis in batch_selections:
+                    best_market = analysis.get("best_market", {})
+                    bookmaker_odd = best_market.get("bookmaker_odd", analysis.get("bookmaker_odd", 0))
+
+                    selections.append(analysis)
+                    accumulated_sum += bookmaker_odd
+
+                    self.logger.info(
+                        f"✅ Added {analysis['fixture'].get('home_team')} vs {analysis['fixture'].get('away_team')} "
+                        f"(date: {current_date.isoformat()}, "
+                        f"odd: {bookmaker_odd}, "
+                        f"accumulated: {accumulated_sum:.1f}/{target})"
+                    )
+
+                    # Stop if target reached
+                    if accumulated_sum >= target:
+                        break
+
+                # Check if target reached after processing this batch
                 if accumulated_sum >= target:
                     self.logger.info(
-                        f"Target reached! {accumulated_sum:.1f} >= {target} "
-                        f"after {day_offset + 1} days"
+                        f"🎯 Target achieved! {accumulated_sum:.1f} odds from {len(selections)} fixtures "
+                        f"across {day_offset + 1} day(s)"
                     )
                     break
 
-                # Predict fixture
-                try:
-                    analysis = await self._predict_fixture(fixture, user_id)
-
-                    # Apply quality gates
-                    if (
-                        analysis["confidence"] >= thresholds["min_confidence"]
-                        and analysis["ev"] >= thresholds["min_ev"]
-                    ):
-                        selections.append(analysis)
-                        accumulated_sum += analysis["bookmaker_odd"]
-
-                        # Log acceptance (INFO for visibility)
-                        self.logger.info(
-                            f"✅ Added {fixture.get('home_team')} vs {fixture.get('away_team')} "
-                            f"(date: {current_date.isoformat()}, "
-                            f"odd: {analysis['bookmaker_odd']}, "
-                            f"accumulated: {accumulated_sum:.1f}/{target})"
-                        )
-                    else:
-                        # Log rejection only if DEBUG enabled (reduces noise)
-                        if self.debug_enabled:
-                            self.logger.debug(
-                                f"❌ Rejected {fixture.get('home_team')} vs {fixture.get('away_team')} "
-                                f"(conf: {analysis['confidence']:.2f} < {thresholds['min_confidence']}, "
-                                f"ev: {analysis['ev']:.2f} < {thresholds['min_ev']})"
-                            )
-
-                except Exception as e:
-                    self.logger.error(
-                        f"Prediction failed for fixture {fixture_id}: {e}",
-                        exc_info=True,
-                    )
-                    failed_predictions += 1
-                    continue
-
             # Check if target reached after processing this day
             if accumulated_sum >= target:
-                self.logger.info(
-                    f"🎯 Target achieved! {accumulated_sum:.1f} odds from {len(selections)} fixtures "
-                    f"across {day_offset + 1} day(s)"
-                )
                 break
 
             days_expanded += 1
@@ -684,13 +825,29 @@ class BatchOrchestrator:
         Returns:
             {
                 "fixture": fixture,
-                "market_code": "BTTS",  # Selected market code
-                "market_name": "Both Teams To Score",  # Human-readable market name
-                "best_outcome": "Yes",  # Best outcome for selected market
-                "bookmaker_odd": 2.5,  # Bookmaker odd for that outcome
-                "confidence": 0.75,  # Confidence (0-1.0)
-                "ev": 0.08,  # Expected value
-                "markets_evaluated": 44,  # Number of markets evaluated
+                "best_market": {  # TOP 1 - Highlighted as the BEST option
+                    "market_code": "BTTS",
+                    "market_name": "Both Teams To Score",
+                    "best_outcome": "Yes",
+                    "probability": 0.72,
+                    "bookmaker_odd": 2.5,
+                    "confidence": 0.75,
+                    "ev": 0.08,
+                },
+                "top_markets": [  # TOP 3 markets by probability
+                    {...},  # Best (same as best_market)
+                    {...},  # Second best
+                    {...},  # Third best
+                ],
+                "markets_evaluated": 44,
+                # Legacy fields for backward compatibility:
+                "market_code": "BTTS",
+                "market_name": "Both Teams To Score",
+                "best_outcome": "Yes",
+                "probability": 0.72,
+                "bookmaker_odd": 2.5,
+                "confidence": 0.75,
+                "ev": 0.08,
             }
 
         Raises:
@@ -806,7 +963,7 @@ class BatchOrchestrator:
 
                 market_predictions.append(market_result)
 
-                # Cache the result (expires at end of day)
+                # Cache the result (expires at end of day - predictions stay valid for current day)
                 if self.cache_enabled:
                     try:
                         ttl = self._calculate_ttl_until_end_of_day()
@@ -854,31 +1011,64 @@ class BatchOrchestrator:
                 f"All {len(all_markets)} market predictions failed for fixture {fixture['id']}"
             )
 
-        # Step 4: Select market with highest PROBABILITY
-        # Strategy: Pick the most likely outcome per fixture, not the highest value bet
+        # Step 4: Select TOP 3 markets by probability
+        # Strategy: Pick the most likely outcomes per fixture, not the highest value bets
         # This prioritizes accuracy (what will happen) over expected value (what's profitable)
-        best_market = max(market_predictions, key=lambda m: m["probability"])
+        sorted_markets = sorted(market_predictions, key=lambda m: m["probability"], reverse=True)
+        top_markets = sorted_markets[:self.TOP_MARKETS]  # Top 3 by default
+        best_market = top_markets[0]  # #1 is the BEST option (highlighted)
 
         # Log summary (INFO level - always visible)
         cache_stats = ""
         if self.cache_enabled and (cache_hits + cache_misses) > 0:
             cache_stats = f", cache: {cache_hits}H/{cache_misses}M ({cache_hits/(cache_hits+cache_misses)*100:.0f}%)"
 
+        # Log top 3 markets
+        top_markets_summary = " | ".join([
+            f"#{i+1} {m['market_code']}: {m['best_outcome']} @ {m['bookmaker_odd']} (prob={m['probability']:.2f})"
+            for i, m in enumerate(top_markets)
+        ])
         self.logger.info(
             f"📊 {fixture.get('home_team')} vs {fixture.get('away_team')} → "
-            f"{best_market['market_code']}: {best_market['best_outcome']} @ {best_market['bookmaker_odd']} "
-            f"(prob={best_market['probability']:.2f}, conf={best_market['confidence']:.2f}{cache_stats})"
+            f"TOP {len(top_markets)}: {top_markets_summary}{cache_stats}"
         )
 
-        # Step 5: Return best market with fixture data
+        # Step 5: Return top 3 markets with best highlighted
         return {
             "fixture": fixture,
+            # NEW: Top 3 markets structure
+            "best_market": {
+                "market_code": best_market["market_code"],
+                "market_name": best_market["market_name"],
+                "best_outcome": best_market["best_outcome"],
+                "probability": best_market["probability"],
+                "bookmaker_odd": best_market["bookmaker_odd"],
+                "confidence": best_market["confidence"],
+                "ev": best_market["ev"],
+                "rank": 1,
+                "is_best": True,
+            },
+            "top_markets": [
+                {
+                    "market_code": m["market_code"],
+                    "market_name": m["market_name"],
+                    "best_outcome": m["best_outcome"],
+                    "probability": m["probability"],
+                    "bookmaker_odd": m["bookmaker_odd"],
+                    "confidence": m["confidence"],
+                    "ev": m["ev"],
+                    "rank": i + 1,
+                    "is_best": i == 0,
+                }
+                for i, m in enumerate(top_markets)
+            ],
+            "markets_evaluated": len(market_predictions),
+            # Legacy fields for backward compatibility
             "market_code": best_market["market_code"],
             "market_name": best_market["market_name"],
             "best_outcome": best_market["best_outcome"],
-            "probability": best_market["probability"],  # Likelihood of outcome (0-1)
+            "probability": best_market["probability"],
             "bookmaker_odd": best_market["bookmaker_odd"],
-            "confidence": best_market["confidence"],  # Certainty about probability (0-1)
+            "confidence": best_market["confidence"],
             "ev": best_market["ev"],
-            "markets_evaluated": len(market_predictions),
         }
