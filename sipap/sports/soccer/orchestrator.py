@@ -285,7 +285,8 @@ class SoccerOrchestrator:
             home_team_id = match_data.get("home_team_id")
             away_team_id = match_data.get("away_team_id")
             external_id = match_data.get("external_id")  # API-Football fixture ID (integer)
-            league_id = match_data.get("league_id")  # API-Football league ID (integer)
+            # Use league_external_id (API-Football integer ID), NOT league_id (internal UUID)
+            league_external_id = match_data.get("league_external_id")  # API-Football league ID (integer)
 
             # Handle both string and dict formats for team names
             home_team = match_data.get("home_team")
@@ -311,9 +312,9 @@ class SoccerOrchestrator:
             # Note: All items must be coroutines, not None, for asyncio.gather
             results = await asyncio.gather(
                 # Sports data (all need external integer IDs from API-Football)
-                # Team stats needs external team_id (int), league_id (int), and season (str)
-                data_mcp.call_tool("get_team_stats", {"team_id": int(home_team_external_id), "league_id": int(league_id), "season": season}) if home_team_external_id and league_id else return_none(),
-                data_mcp.call_tool("get_team_stats", {"team_id": int(away_team_external_id), "league_id": int(league_id), "season": season}) if away_team_external_id and league_id else return_none(),
+                # Team stats needs external team_id (int), league_external_id (int), and season (str)
+                data_mcp.call_tool("get_team_stats", {"team_id": int(home_team_external_id), "league_id": int(league_external_id), "season": season}) if home_team_external_id and league_external_id else return_none(),
+                data_mcp.call_tool("get_team_stats", {"team_id": int(away_team_external_id), "league_id": int(league_external_id), "season": season}) if away_team_external_id and league_external_id else return_none(),
                 # Head-to-head needs external team IDs (integers)
                 data_mcp.call_tool("get_head_to_head", {"home_team_id": int(home_team_external_id), "away_team_id": int(away_team_external_id)}) if home_team_external_id and away_team_external_id else return_none(),
                 # Form data uses team UUIDs (string)
