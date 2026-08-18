@@ -9,6 +9,7 @@ This factory:
 4. Handles connection pooling and lifecycle
 """
 
+import asyncio
 import logging
 import os
 import re
@@ -268,6 +269,93 @@ class MCPFactory:
                 health_status[server_name] = False
 
         return health_status
+
+    async def warmup(
+        self,
+        server_names: list[str] | None = None,
+        timeout: float = 10.0,
+    ) -> dict[str, bool]:
+        """
+        Warm up MCP servers by pinging them to trigger Lambda cold starts.
+
+        This should be called BEFORE batch processing to ensure MCPs are ready.
+        The warmup:
+        1. Resets circuit breakers for all specified MCPs
+        2. Concurrently pings each MCP with list_tools
+        3. Waits for responses (with timeout)
+        4. Returns success status for each MCP
+
+        Args:
+            server_names: List of MCP server names to warm up (default: all)
+            timeout: Maximum time to wait for each MCP (default: 10s)
+
+        Returns:
+            Dict mapping server names to warmup success status (True/False)
+
+        Example:
+            >>> factory = MCPFactory()
+            >>> status = await factory.warmup(["data", "intelligence"])
+            >>> print(status)
+            {"data": True, "intelligence": True}
+        """
+        if server_names is None:
+            servers = self.config.get("mcp_servers", {})
+            server_names = list(servers.keys())
+
+        self.logger.info(
+            f"🔥 Warming up {len(server_names)} MCP servers: {server_names}"
+        )
+
+        warmup_status: dict[str, bool] = {}
+
+        async def warmup_single(server_name: str) -> tuple[str, bool]:
+            """Warm up a single MCP server."""
+            try:
+                client = self.create(server_name)
+
+                # Reset circuit breaker before warmup
+                client.reset_circuit_breaker()
+
+                # Ping with list_tools (lightweight operation)
+                await asyncio.wait_for(
+                    client.list_tools(),
+                    timeout=timeout,
+                )
+
+                self.logger.info(f"✅ MCP warmed up: {server_name}")
+                return (server_name, True)
+
+            except asyncio.TimeoutError:
+                self.logger.warning(
+                    f"⚠️ MCP warmup timeout ({timeout}s): {server_name}"
+                )
+                return (server_name, False)
+
+            except Exception as e:
+                self.logger.warning(
+                    f"⚠️ MCP warmup failed: {server_name} - {e}"
+                )
+                return (server_name, False)
+
+        # Warm up all MCPs concurrently
+        tasks = [warmup_single(name) for name in server_names]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Process results
+        for result in results:
+            if isinstance(result, tuple):
+                server_name, success = result
+                warmup_status[server_name] = success
+            else:
+                # Exception occurred
+                self.logger.error(f"Warmup task failed: {result}")
+
+        success_count = sum(1 for v in warmup_status.values() if v)
+        self.logger.info(
+            f"🔥 MCP warmup complete: {success_count}/{len(server_names)} successful"
+        )
+
+        return warmup_status
 
     async def get_tools_for_agent(self, server_name: str) -> list[Any]:
         """

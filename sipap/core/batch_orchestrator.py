@@ -337,6 +337,19 @@ class BatchOrchestrator:
             },
         )
 
+        # Step 0: Warm up MCP servers (trigger Lambda cold starts)
+        # This prevents circuit breaker trips from cold start timeouts
+        try:
+            warmup_status = await self.mcp_factory.warmup(
+                server_names=["data", "intelligence"],
+                timeout=15.0,  # 15 seconds for cold start
+            )
+            if not all(warmup_status.values()):
+                failed = [k for k, v in warmup_status.items() if not v]
+                self.logger.warning(f"Some MCPs failed warmup: {failed}")
+        except Exception as e:
+            self.logger.warning(f"MCP warmup failed (continuing anyway): {e}")
+
         # Step 1: Validate and set defaults
         target = intent.target_odds or 20.0  # Default to 20 odds
         quality_threshold = intent.quality_threshold or "high"

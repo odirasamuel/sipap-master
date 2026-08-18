@@ -87,8 +87,8 @@ class MCPClient:
         self._failure_count = 0
         self._circuit_open = False
         self._circuit_open_until = 0.0
-        self._failure_threshold = 5  # Open circuit after 5 consecutive failures
-        self._recovery_timeout = 60.0  # Try to recover after 60 seconds
+        self._failure_threshold = 15  # Open circuit after 15 consecutive failures (was 5)
+        self._recovery_timeout = 30.0  # Try to recover after 30 seconds (was 60)
 
         # Initialize AWS Lambda URL signer for automatic request signing
         self._aws_signer = AWSLambdaURLSigner(logger=self.logger)
@@ -135,6 +135,15 @@ class MCPClient:
                 # Attempt recovery (half-open state)
                 self.logger.info(f"Circuit breaker entering half-open state: {self.name}")
                 self._circuit_open = False
+
+    def reset_circuit_breaker(self) -> None:
+        """Manually reset circuit breaker to closed state."""
+        was_open = self._circuit_open
+        self._failure_count = 0
+        self._circuit_open = False
+        self._circuit_open_until = 0.0
+        if was_open:
+            self.logger.info(f"Circuit breaker manually reset: {self.name}")
 
     def _record_success(self) -> None:
         """Record successful call and reset failure count."""
