@@ -87,6 +87,13 @@ class BatchOrchestrator:
         self.TOP_MARKETS = 3  # Return top 3 markets per fixture
         self.CACHE_TTL_HOURS = 24  # Cache predictions for 24 hours
 
+        # Rate limiting for Lambda calls (prevent 429 errors)
+        # With 3 concurrent predictions and ~7 context calls each = 21 concurrent Lambda requests
+        # Lambda function URLs have 10 concurrent connections by default, so we throttle heavily
+        self.MAX_CONCURRENT_PREDICTIONS = 3  # Max concurrent fixture predictions
+        self._prediction_semaphore = asyncio.Semaphore(self.MAX_CONCURRENT_PREDICTIONS)
+        self.INTER_REQUEST_DELAY = 0.5  # 500ms delay between predictions to smooth out bursts
+
         # Quality threshold mappings
         # These map user quality terms to confidence + EV thresholds
         self.quality_thresholds = {
@@ -196,7 +203,8 @@ class BatchOrchestrator:
             return [], 0
 
         self.logger.info(
-            f"🔄 Processing batch of {len(fixtures)} fixtures concurrently"
+            f"🔄 Processing batch of {len(fixtures)} fixtures "
+            f"(max {self.MAX_CONCURRENT_PREDICTIONS} concurrent, {self.INTER_REQUEST_DELAY}s delay)"
         )
 
         # Process each fixture and collect results
@@ -204,9 +212,12 @@ class BatchOrchestrator:
         failed_count = 0
 
         # Create prediction tasks for all fixtures in this batch
+        # Uses semaphore to limit concurrent MCP calls and prevent 429 errors
         async def predict_single(fixture: dict[str, Any]) -> tuple[dict[str, Any] | None, bool]:
             """
             Predict fixture and apply quality gates.
+
+            Uses semaphore to limit concurrent MCP calls and prevent Lambda rate limiting.
 
             Returns:
                 Tuple of (analysis_result, is_failure)
@@ -226,34 +237,39 @@ class BatchOrchestrator:
                     )
                 return None, False
 
-            try:
-                analysis = await self._predict_fixture(fixture, user_id)
+            # Acquire semaphore to limit concurrent MCP calls
+            async with self._prediction_semaphore:
+                try:
+                    # Add small delay to prevent burst requests
+                    await asyncio.sleep(self.INTER_REQUEST_DELAY)
 
-                # Apply quality gates using the BEST market
-                best_market = analysis.get("best_market", {})
-                confidence = best_market.get("confidence", analysis.get("confidence", 0))
-                ev = best_market.get("ev", analysis.get("ev", 0))
+                    analysis = await self._predict_fixture(fixture, user_id)
 
-                if (
-                    confidence >= thresholds["min_confidence"]
-                    and ev >= thresholds["min_ev"]
-                ):
-                    return analysis, False
-                else:
-                    if self.debug_enabled:
-                        self.logger.debug(
-                            f"❌ Rejected {fixture.get('home_team')} vs {fixture.get('away_team')} - "
-                            f"conf={confidence:.2f} < {thresholds['min_confidence']}, "
-                            f"ev={ev:.2f} < {thresholds['min_ev']}"
-                        )
-                    return None, False
+                    # Apply quality gates using the BEST market
+                    best_market = analysis.get("best_market", {})
+                    confidence = best_market.get("confidence", analysis.get("confidence", 0))
+                    ev = best_market.get("ev", analysis.get("ev", 0))
 
-            except Exception as e:
-                self.logger.error(
-                    f"Prediction failed for fixture {fixture.get('id')}: {e}",
-                    exc_info=True,
-                )
-                return None, True  # Mark as failure
+                    if (
+                        confidence >= thresholds["min_confidence"]
+                        and ev >= thresholds["min_ev"]
+                    ):
+                        return analysis, False
+                    else:
+                        if self.debug_enabled:
+                            self.logger.debug(
+                                f"❌ Rejected {fixture.get('home_team')} vs {fixture.get('away_team')} - "
+                                f"conf={confidence:.2f} < {thresholds['min_confidence']}, "
+                                f"ev={ev:.2f} < {thresholds['min_ev']}"
+                            )
+                        return None, False
+
+                except Exception as e:
+                    self.logger.error(
+                        f"Prediction failed for fixture {fixture.get('id')}: {e}",
+                        exc_info=True,
+                    )
+                    return None, True  # Mark as failure
 
         # Run all predictions concurrently
         results = await asyncio.gather(

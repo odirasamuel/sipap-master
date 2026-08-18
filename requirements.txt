@@ -34,3 +34,6 @@ scipy>=1.11.0
 
 # Date/Time handling
 python-dateutil>=2.8.2
+
+# Web content extraction
+beautifulsoup4>=4.12.0
