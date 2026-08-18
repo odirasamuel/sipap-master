@@ -432,12 +432,13 @@ class MCPFactory:
             wrapper = create_mcp_tool(tool_name, server_name, client)
 
             # Decorate with @tool
+            # Note: Strands tool decorator only accepts name and description
+            # input_schema is not supported - it's inferred from function signature
             from strands import tool
 
             tool_func = tool(
                 name=tool_name,
                 description=tool_description,
-                input_schema=input_schema,
             )(wrapper)
 
             tools.append(tool_func)
