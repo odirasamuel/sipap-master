@@ -87,12 +87,9 @@ class BatchOrchestrator:
         self.TOP_MARKETS = 3  # Return top 3 markets per fixture
         self.CACHE_TTL_HOURS = 24  # Cache predictions for 24 hours
 
-        # Rate limiting for Lambda calls (prevent 429 errors)
-        # With 3 concurrent predictions and ~7 context calls each = 21 concurrent Lambda requests
-        # Lambda function URLs have 10 concurrent connections by default, so we throttle heavily
-        self.MAX_CONCURRENT_PREDICTIONS = 3  # Max concurrent fixture predictions
-        self._prediction_semaphore = asyncio.Semaphore(self.MAX_CONCURRENT_PREDICTIONS)
-        self.INTER_REQUEST_DELAY = 0.5  # 500ms delay between predictions to smooth out bursts
+        # Sequential processing with delay between fixtures
+        # This prevents Lambda rate limiting (429 errors) by processing one fixture at a time
+        self.INTER_REQUEST_DELAY = 0.5  # 500ms delay between fixtures to prevent bursts
 
         # Quality threshold mappings
         # These map user quality terms to confidence + EV thresholds
@@ -177,11 +174,11 @@ class BatchOrchestrator:
         thresholds: dict[str, float],
     ) -> tuple[list[dict[str, Any]], int]:
         """
-        Process a batch of fixtures concurrently (up to BATCH_SIZE at a time).
+        Process a batch of fixtures SEQUENTIALLY (one at a time).
 
-        This processes fixtures in parallel for efficiency while maintaining
-        quality gates for each individual fixture. Each fixture gets its
-        top 3 markets evaluated and the best one selected.
+        CHANGED: Now processes fixtures one at a time to prevent Lambda rate limiting.
+        Each fixture gets fully evaluated (all 44 markets) before moving to the next.
+        This is slower but more reliable and prevents 429 errors.
 
         Args:
             fixtures: List of fixture dictionaries to process
@@ -203,27 +200,23 @@ class BatchOrchestrator:
             return [], 0
 
         self.logger.info(
-            f"🔄 Processing batch of {len(fixtures)} fixtures "
-            f"(max {self.MAX_CONCURRENT_PREDICTIONS} concurrent, {self.INTER_REQUEST_DELAY}s delay)"
+            f"🔄 Processing batch of {len(fixtures)} fixtures SEQUENTIALLY "
+            f"({self.INTER_REQUEST_DELAY}s delay between fixtures)"
         )
 
-        # Process each fixture and collect results
+        # Process each fixture SEQUENTIALLY and collect results
         accepted: list[dict[str, Any]] = []
         failed_count = 0
 
-        # Create prediction tasks for all fixtures in this batch
-        # Uses semaphore to limit concurrent MCP calls and prevent 429 errors
-        async def predict_single(fixture: dict[str, Any]) -> tuple[dict[str, Any] | None, bool]:
-            """
-            Predict fixture and apply quality gates.
+        for i, fixture in enumerate(fixtures):
+            fixture_num = i + 1
+            home_team = fixture.get("home_team", "Unknown")
+            away_team = fixture.get("away_team", "Unknown")
 
-            Uses semaphore to limit concurrent MCP calls and prevent Lambda rate limiting.
+            self.logger.info(
+                f"📊 [{fixture_num}/{len(fixtures)}] Evaluating: {home_team} vs {away_team}"
+            )
 
-            Returns:
-                Tuple of (analysis_result, is_failure)
-                - analysis_result: The prediction analysis or None if rejected/skipped
-                - is_failure: True if prediction failed (error), False otherwise
-            """
             # Skip fixtures without odds
             has_odds = (
                 fixture.get("best_home_odds") is not None
@@ -231,58 +224,49 @@ class BatchOrchestrator:
                 or fixture.get("best_away_odds") is not None
             )
             if not has_odds:
-                if self.debug_enabled:
-                    self.logger.debug(
-                        f"Skipping fixture {fixture.get('id')} ({fixture.get('home_team')} vs {fixture.get('away_team')}) - no odds"
-                    )
-                return None, False
+                self.logger.info(
+                    f"   Skipping - no odds available"
+                )
+                continue
 
-            # Acquire semaphore to limit concurrent MCP calls
-            async with self._prediction_semaphore:
-                try:
-                    # Add small delay to prevent burst requests
+            try:
+                # Add delay between fixtures to prevent rate limiting
+                if i > 0:
                     await asyncio.sleep(self.INTER_REQUEST_DELAY)
 
-                    analysis = await self._predict_fixture(fixture, user_id)
+                # Evaluate this fixture (all 44 markets)
+                analysis = await self._predict_fixture(fixture, user_id)
 
-                    # Apply quality gates using the BEST market
-                    best_market = analysis.get("best_market", {})
-                    confidence = best_market.get("confidence", analysis.get("confidence", 0))
-                    ev = best_market.get("ev", analysis.get("ev", 0))
+                # Apply quality gates using the BEST market
+                best_market = analysis.get("best_market", {})
+                confidence = best_market.get("confidence", analysis.get("confidence", 0))
+                ev = best_market.get("ev", analysis.get("ev", 0))
+                market_code = best_market.get("market_code", "?")
+                outcome = best_market.get("best_outcome", "?")
+                bookmaker_odd = best_market.get("bookmaker_odd", 0)
 
-                    if (
-                        confidence >= thresholds["min_confidence"]
-                        and ev >= thresholds["min_ev"]
-                    ):
-                        return analysis, False
-                    else:
-                        if self.debug_enabled:
-                            self.logger.debug(
-                                f"❌ Rejected {fixture.get('home_team')} vs {fixture.get('away_team')} - "
-                                f"conf={confidence:.2f} < {thresholds['min_confidence']}, "
-                                f"ev={ev:.2f} < {thresholds['min_ev']}"
-                            )
-                        return None, False
-
-                except Exception as e:
-                    self.logger.error(
-                        f"Prediction failed for fixture {fixture.get('id')}: {e}",
-                        exc_info=True,
+                if (
+                    confidence >= thresholds["min_confidence"]
+                    and ev >= thresholds["min_ev"]
+                ):
+                    accepted.append(analysis)
+                    self.logger.info(
+                        f"   ✅ ACCEPTED: {market_code} → {outcome} @ {bookmaker_odd} "
+                        f"(conf={confidence:.2f}, ev={ev:+.4f})"
                     )
-                    return None, True  # Mark as failure
+                else:
+                    self.logger.info(
+                        f"   ❌ REJECTED: {market_code} → {outcome} "
+                        f"(conf={confidence:.2f} < {thresholds['min_confidence']}, "
+                        f"ev={ev:+.4f} < {thresholds['min_ev']})"
+                    )
 
-        # Run all predictions concurrently
-        results = await asyncio.gather(
-            *[predict_single(f) for f in fixtures],
-            return_exceptions=False  # Don't return exceptions, let predict_single handle them
-        )
-
-        # Process results
-        for result_analysis, is_failure in results:
-            if is_failure:
+            except Exception as e:
+                self.logger.error(
+                    f"   ❌ FAILED: {e}",
+                    exc_info=False,  # Don't log full traceback for each fixture
+                )
                 failed_count += 1
-            elif result_analysis is not None:
-                accepted.append(result_analysis)
 
         self.logger.info(
             f"✅ Batch complete: {len(accepted)} accepted, "
@@ -936,15 +920,31 @@ class BatchOrchestrator:
                 try:
                     cached_result = self.cache.get(cache_key)
                     if cached_result:
-                        cache_hits += 1
-                        market_predictions.append(cached_result)
-                        # Only log cache hits if DEBUG enabled (reduces 44 logs per fixture)
-                        if self.debug_enabled:
-                            self.logger.debug(
-                                f"  {market.code}: CACHE HIT - {cached_result['best_outcome']} @ {cached_result['bookmaker_odd']} "
-                                f"(prob: {cached_result['probability']:.2f}, conf: {cached_result['confidence']:.2f}, ev: {cached_result['ev']:+.4f})"
-                            )
-                        continue  # Skip to next market
+                        # Validate cached result - skip invalid predictions
+                        cached_outcome = cached_result.get('best_outcome', 'Unknown')
+                        cached_prob = cached_result.get('probability', 0.0)
+
+                        if cached_outcome == 'Unknown' or cached_prob == 0.0:
+                            # Invalid cached result - clear it and re-evaluate
+                            if self.debug_enabled:
+                                self.logger.debug(
+                                    f"  {market.code}: CACHE INVALID (outcome={cached_outcome}, prob={cached_prob}) - re-evaluating"
+                                )
+                            try:
+                                self.cache.delete(cache_key)
+                            except Exception:
+                                pass
+                            # Fall through to re-evaluate
+                        else:
+                            cache_hits += 1
+                            market_predictions.append(cached_result)
+                            # Only log cache hits if DEBUG enabled (reduces 44 logs per fixture)
+                            if self.debug_enabled:
+                                self.logger.debug(
+                                    f"  {market.code}: CACHE HIT - {cached_result['best_outcome']} @ {cached_result['bookmaker_odd']} "
+                                    f"(prob: {cached_result['probability']:.2f}, conf: {cached_result['confidence']:.2f}, ev: {cached_result['ev']:+.4f})"
+                                )
+                            continue  # Skip to next market
                 except Exception as e:
                     # Cache read failed - log only if DEBUG (reduces noise)
                     if self.debug_enabled:
@@ -993,7 +993,10 @@ class BatchOrchestrator:
                 market_predictions.append(market_result)
 
                 # Cache the result (expires at end of day - predictions stay valid for current day)
-                if self.cache_enabled:
+                # CRITICAL: Never cache invalid predictions (Unknown outcome or 0.0 probability)
+                is_valid_prediction = best_outcome != "Unknown" and probability > 0.0
+
+                if self.cache_enabled and is_valid_prediction:
                     try:
                         ttl = self._calculate_ttl_until_end_of_day()
                         self.cache.set(cache_key, market_result, ttl=ttl)
@@ -1004,13 +1007,14 @@ class BatchOrchestrator:
                                 f"(prob: {probability:.2f}, conf: {confidence:.2f}, ev: {ev_value:+.4f}) [CACHED, TTL={ttl}s]"
                             )
                     except Exception as e:
-                        # Cache write failed - always log warnings
+                        # Cache write failed - log only in debug
                         if self.debug_enabled:
                             self.logger.debug(f"Cache write failed for {cache_key}: {e}")
-                            self.logger.debug(
-                                f"  {market.code}: {best_outcome} @ {bookmaker_odd} "
-                                f"(prob: {probability:.2f}, conf: {confidence:.2f}, ev: {ev_value:+.4f})"
-                            )
+                elif not is_valid_prediction:
+                    # Invalid prediction - log warning
+                    self.logger.warning(
+                        f"  {market.code}: Invalid prediction (outcome={best_outcome}, prob={probability}) - NOT CACHED"
+                    )
                 elif self.debug_enabled:
                     # Only log if DEBUG enabled
                     self.logger.debug(
