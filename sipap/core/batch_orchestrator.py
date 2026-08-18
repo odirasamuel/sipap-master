@@ -167,6 +167,58 @@ class BatchOrchestrator:
         # Ensure TTL is at least 60 seconds (avoid 0 or negative TTL)
         return max(ttl_seconds, 60)
 
+    def clear_prediction_cache(self, target_date: str | None = None) -> int:
+        """
+        Clear all prediction cache entries for a specific date (or today).
+
+        This is useful for clearing invalid cached predictions that have
+        Unknown outcomes or 0.0 probability values.
+
+        Args:
+            target_date: Date to clear in YYYY-MM-DD format (default: today)
+
+        Returns:
+            Number of cache entries deleted
+
+        Example:
+            >>> orchestrator.clear_prediction_cache()  # Clear today's cache
+            >>> orchestrator.clear_prediction_cache("2026-08-18")  # Clear specific date
+        """
+        if not self.cache_enabled or self.cache is None:
+            self.logger.warning("Cache is not enabled - nothing to clear")
+            return 0
+
+        if target_date is None:
+            target_date = date.today().isoformat()
+
+        # Redis SCAN to find all prediction keys for this date
+        # Pattern: prediction:*:*:{date}
+        pattern = f"prediction:*:*:{target_date}"
+
+        try:
+            # Get Redis client from cache adapter
+            redis_client = self.cache._client
+            deleted_count = 0
+
+            # Use SCAN to find matching keys (safe for production)
+            cursor = 0
+            while True:
+                cursor, keys = redis_client.scan(cursor, match=pattern, count=100)
+                if keys:
+                    deleted_count += redis_client.delete(*keys)
+                    self.logger.info(f"Deleted {len(keys)} cache entries matching {pattern}")
+                if cursor == 0:
+                    break
+
+            self.logger.info(
+                f"🗑️ Cleared {deleted_count} prediction cache entries for {target_date}"
+            )
+            return deleted_count
+
+        except Exception as e:
+            self.logger.error(f"Failed to clear prediction cache: {e}", exc_info=True)
+            return 0
+
     async def _process_fixture_batch(
         self,
         fixtures: list[dict[str, Any]],
@@ -925,15 +977,16 @@ class BatchOrchestrator:
                         cached_prob = cached_result.get('probability', 0.0)
 
                         if cached_outcome == 'Unknown' or cached_prob == 0.0:
-                            # Invalid cached result - clear it and re-evaluate
-                            if self.debug_enabled:
-                                self.logger.debug(
-                                    f"  {market.code}: CACHE INVALID (outcome={cached_outcome}, prob={cached_prob}) - re-evaluating"
-                                )
+                            # Invalid cached result - DELETE it and re-evaluate
+                            # Always log this (important for debugging cache issues)
+                            self.logger.warning(
+                                f"  🗑️ {market.code}: CACHE INVALID (outcome={cached_outcome}, prob={cached_prob}) - DELETING and re-evaluating"
+                            )
                             try:
                                 self.cache.delete(cache_key)
-                            except Exception:
-                                pass
+                                self.logger.info(f"  ✅ Deleted invalid cache entry: {cache_key}")
+                            except Exception as e:
+                                self.logger.warning(f"  ⚠️ Failed to delete cache entry {cache_key}: {e}")
                             # Fall through to re-evaluate
                         else:
                             cache_hits += 1
