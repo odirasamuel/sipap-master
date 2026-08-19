@@ -432,13 +432,15 @@ class MCPFactory:
             wrapper = create_mcp_tool(tool_name, server_name, client)
 
             # Decorate with @tool
-            # Note: Strands tool decorator only accepts name and description
-            # input_schema is not supported - it's inferred from function signature
+            # CRITICAL: Must pass inputSchema so Strands knows the actual parameters
+            # Without this, Strands sees **kwargs signature and creates a "kwargs" field
+            # in the input model, causing arguments to be wrapped as {"kwargs": {...}}
             from strands import tool
 
             tool_func = tool(
                 name=tool_name,
                 description=tool_description,
+                inputSchema={"json": input_schema} if input_schema else None,
             )(wrapper)
 
             tools.append(tool_func)

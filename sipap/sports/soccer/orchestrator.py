@@ -533,7 +533,9 @@ Focus on your specialized analysis approach based on your role.
         async def run_agent(name: str, agent: Any) -> tuple[str, Any]:
             """Execute single agent and return (name, result)."""
             try:
-                result = await agent(prompt)
+                # Use invoke_async for proper async invocation of Strands agents
+                # agent(prompt) returns AgentResult synchronously, not an awaitable
+                result = await agent.invoke_async(prompt)
                 # Only log individual agent completion if DEBUG enabled
                 if self.debug_enabled:
                     self.logger.debug(f"Agent {name} completed")
