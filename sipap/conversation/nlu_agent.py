@@ -395,7 +395,7 @@ class NLUAgent:
         # Dynamic league keywords from LEAGUE_REFERENCE (no hardcoding!)
         try:
             from sipap_common.data.league_reference import get_sports_context_keywords
-            league_keywords = get_sports_context_keywords()
+            league_keywords = set(get_sports_context_keywords())  # Convert list to set
         except ImportError:
             league_keywords = set()  # Fallback if import fails
 
@@ -1486,7 +1486,8 @@ class ClarificationAgent:
             elif intent.intent_type == "batch_prediction":
                 league_context = ""
                 if intent.leagues and len(intent.leagues) > 0:
-                    league_context = f"{', '.join(intent.leagues)} "
+                    # intent.leagues is list[LeagueEntity], extract names
+                    league_context = f"{', '.join(league.name for league in intent.leagues)} "
 
                 return ClarificationResponse(
                     clarification_type="ask_for_missing_entity",

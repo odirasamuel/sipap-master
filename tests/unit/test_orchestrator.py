@@ -51,7 +51,11 @@ class TestEnsembleCalculation:
 
     @pytest.fixture
     def sample_agent_predictions(self):
-        """Sample agent predictions for testing."""
+        """Sample agent predictions for testing.
+
+        MVP uses 3-agent ensemble (statistical, form, news).
+        ML and market agents were removed from MVP for simplicity.
+        """
         return [
             {
                 "agent": "statistical",
@@ -65,17 +69,6 @@ class TestEnsembleCalculation:
                 "evidence": ["Home team has 70% win rate", "Strong Elo rating"]
             },
             {
-                "agent": "ml",
-                "prediction": {
-                    "market": "1X2",
-                    "outcome": "home_win",
-                    "probability": 0.68,
-                    "confidence": 75
-                },
-                "reasoning": "ML model predicts home win",
-                "evidence": ["Model confidence: 75%"]
-            },
-            {
                 "agent": "form",
                 "prediction": {
                     "market": "1X2",
@@ -85,17 +78,6 @@ class TestEnsembleCalculation:
                 },
                 "reasoning": "Home team in better form",
                 "evidence": ["5-match win streak"]
-            },
-            {
-                "agent": "market",
-                "prediction": {
-                    "market": "1X2",
-                    "outcome": "draw",
-                    "probability": 0.45,
-                    "confidence": 50
-                },
-                "reasoning": "Market suggests close match",
-                "evidence": ["Odds imply tight contest"]
             },
             {
                 "agent": "news",
@@ -144,7 +126,7 @@ class TestEnsembleCalculation:
         """Test outcome selection by majority vote."""
         outcome = orchestrator._select_outcome(sample_agent_predictions)
 
-        # 4 out of 5 agents predict "home_win"
+        # All 3 agents predict "home_win"
         assert outcome == "home_win"
 
     def test_calculate_agreement_high(self, orchestrator):
@@ -183,11 +165,9 @@ class TestEnsembleCalculation:
         """Test reasoning aggregation."""
         reasoning = orchestrator._generate_reasoning(sample_agent_predictions)
 
-        # Should combine all agent reasoning
+        # Should combine all agent reasoning (3-agent MVP ensemble)
         assert "statistical" in reasoning
-        assert "ml" in reasoning
         assert "form" in reasoning
-        assert "market" in reasoning
         assert "news" in reasoning
         assert isinstance(reasoning, str)
 
@@ -213,7 +193,10 @@ class TestQualityGates:
 
     @pytest.fixture
     def passing_ensemble(self):
-        """Ensemble that should pass all quality gates."""
+        """Ensemble that should pass all quality gates.
+
+        MVP uses 3-agent ensemble, need at least 2/3 consensus.
+        """
         return {
             "market": "1X2",
             "outcome": "home_win",
@@ -222,9 +205,7 @@ class TestQualityGates:
             "agent_predictions": [
                 {"prediction": {"outcome": "home_win"}},
                 {"prediction": {"outcome": "home_win"}},
-                {"prediction": {"outcome": "home_win"}},
-                {"prediction": {"outcome": "draw"}},
-                {"prediction": {"outcome": "home_win"}}
+                {"prediction": {"outcome": "draw"}}
             ],
             "reasoning": "Strong consensus",
             "evidence": ["Evidence 1", "Evidence 2"]
@@ -268,14 +249,15 @@ class TestQualityGates:
         assert "Probability below threshold" in result["reason"]
 
     def test_quality_gate_no_consensus(self, orchestrator):
-        """Test quality gate fails without agent consensus."""
+        """Test quality gate fails without agent consensus.
+
+        With 3 agents, need at least 2/3 to agree.
+        """
         ensemble = {
             "confidence": 70,
             "probability": 0.65,
             "agent_predictions": [
                 {"prediction": {"outcome": "home_win"}},
-                {"prediction": {"outcome": "draw"}},
-                {"prediction": {"outcome": "away_win"}},
                 {"prediction": {"outcome": "draw"}},
                 {"prediction": {"outcome": "away_win"}}
             ]

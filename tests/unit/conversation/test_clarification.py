@@ -5,6 +5,7 @@ import pytest
 from sipap.conversation.nlu_agent import (
     ClarificationAgent,
     ClarificationResponse,
+    LeagueEntity,
     NLUAgent,
     RequestIntent,
 )
@@ -46,7 +47,7 @@ class TestClarificationAgent:
             intent_type="batch_prediction",
             confidence=0.6,
             target_odds=None,
-            leagues=["Premier League"],
+            leagues=[LeagueEntity(id=39, name="Premier League", country="England")],
             original_query="Premier League predictions",
             extracted_entities={},
         )
@@ -87,7 +88,7 @@ class TestClarificationAgent:
         intent = RequestIntent(
             intent_type="unknown",
             confidence=0.4,
-            leagues=["Premier League"],
+            leagues=[LeagueEntity(id=39, name="Premier League", country="England")],
             original_query="What's happening in Premier League?",
             extracted_entities={"leagues": ["Premier League"]},
         )
@@ -216,7 +217,7 @@ class TestNLUAgent:
             intent_type="batch_prediction",
             confidence=0.85,
             target_odds=20.0,
-            leagues=["Premier League"],
+            leagues=[LeagueEntity(id=39, name="Premier League", country="England")],
             quality_threshold="highest",
             original_query="Give me 20 odds from Premier League with highest success",
             extracted_entities={},

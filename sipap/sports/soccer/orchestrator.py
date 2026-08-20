@@ -22,6 +22,7 @@ from sqlalchemy import text
 
 from sipap.factory.agent import AgentToolFactory
 from sipap.factory.mcp import MCPFactory
+from sipap.sports.soccer.market_evaluator import MarketEvaluator, MarketEvaluation
 
 
 class SoccerOrchestrator:
@@ -72,6 +73,10 @@ class SoccerOrchestrator:
 
         # Check if DEBUG logging is enabled
         self.debug_enabled = self.logger.isEnabledFor(logging.DEBUG)
+
+        # Initialize MarketEvaluator for 44-market evaluation
+        # Will be properly initialized when data MCP is created
+        self._market_evaluator: MarketEvaluator | None = None
 
         log_mode = "DEBUG mode enabled" if self.debug_enabled else "INFO mode (summary only)"
         self.logger.info(f"SoccerOrchestrator initialized - {log_mode}")
@@ -381,6 +386,154 @@ class SoccerOrchestrator:
                 exc_info=True,
             )
             raise
+
+    async def evaluate_all_markets(
+        self,
+        match_id: str,
+        top_n: int = 3,
+        min_probability: float = 0.5,
+    ) -> dict[str, Any]:
+        """
+        Evaluate all 44 betting markets for a fixture and return top N.
+
+        This method:
+        1. Resolves match to get team/league IDs
+        2. Creates MarketEvaluator with Data MCP client
+        3. Evaluates all 44 markets using statistical tools
+        4. Ranks markets by weighted probability
+        5. Returns top N markets with highest success probability
+
+        Args:
+            match_id: Match identifier (UUID or natural language)
+            top_n: Number of top markets to return (default: 3)
+            min_probability: Minimum probability threshold (default: 0.5)
+
+        Returns:
+            Dictionary with fixture info, all market evaluations, and top markets
+
+        Example:
+            >>> result = await orchestrator.evaluate_all_markets("match-uuid", top_n=3)
+            >>> print(result["top_markets"][0])
+            {
+                "rank": 1,
+                "market_code": "CHANCEMIX_1X2_OU25",
+                "market_name": "Chance Mix 1X2 or Total 2.5",
+                "best_outcome": "Home or Over",
+                "probability": 0.8571,
+                ...
+            }
+        """
+        self.logger.info(f"Evaluating all 44 markets for match: {match_id}")
+
+        # Step 1: Resolve match ID if natural language
+        resolved_match_id = await self.resolve_match_id(match_id)
+
+        # Step 2: Get match details to extract team/league IDs
+        data_mcp = self.mcp_factory.create("data")
+
+        match_details_result = await data_mcp.call_tool(
+            "get_match_details", {"match_id": resolved_match_id}
+        )
+
+        if isinstance(match_details_result, Exception) or not match_details_result.get("match"):
+            raise ValueError(f"Could not fetch match details for match_id: {resolved_match_id}")
+
+        match_data = match_details_result["match"]
+
+        # Extract API-Football IDs (integers) for Data MCP tools
+        home_team_external_id = match_data.get("home_team_external_id")
+        away_team_external_id = match_data.get("away_team_external_id")
+        league_external_id = match_data.get("league_external_id")
+
+        if not all([home_team_external_id, away_team_external_id, league_external_id]):
+            raise ValueError(
+                f"Missing external IDs for match. home={home_team_external_id}, "
+                f"away={away_team_external_id}, league={league_external_id}"
+            )
+
+        # Handle team names (can be string or dict)
+        home_team = match_data.get("home_team")
+        away_team = match_data.get("away_team")
+        home_team_name = (
+            home_team if isinstance(home_team, str)
+            else (home_team.get("name", "Unknown") if isinstance(home_team, dict) else "Unknown")
+        )
+        away_team_name = (
+            away_team if isinstance(away_team, str)
+            else (away_team.get("name", "Unknown") if isinstance(away_team, dict) else "Unknown")
+        )
+
+        # Step 3: Initialize MarketEvaluator with Data MCP client
+        if self._market_evaluator is None:
+            self._market_evaluator = MarketEvaluator(data_mcp)
+
+        # Step 4: Evaluate all 44 markets
+        self.logger.info(
+            f"Evaluating markets for: {home_team_name} vs {away_team_name} "
+            f"(IDs: {home_team_external_id} vs {away_team_external_id}, league: {league_external_id})"
+        )
+
+        all_evaluations = await self._market_evaluator.evaluate_all_markets(
+            home_team_id=int(home_team_external_id),
+            away_team_id=int(away_team_external_id),
+            league_id=int(league_external_id),
+        )
+
+        # Step 5: Get top N markets by probability
+        top_markets = self._market_evaluator.get_top_markets(
+            evaluations=all_evaluations,
+            top_n=top_n,
+            min_probability=min_probability,
+        )
+
+        # Step 6: Build response
+        result = {
+            "fixture": {
+                "id": resolved_match_id,
+                "external_id": match_data.get("external_id"),
+                "home_team": home_team_name,
+                "away_team": away_team_name,
+                "league": match_data.get("league_name", match_data.get("league", "Unknown")),
+                "scheduled_at": match_data.get("scheduled_at"),
+            },
+            "markets_evaluated": len(all_evaluations),
+            "top_markets": top_markets,
+            "all_evaluations": [e.to_dict() for e in all_evaluations],
+            "recommendation": self._generate_market_recommendation(top_markets),
+        }
+
+        self.logger.info(
+            f"Market evaluation complete: {len(all_evaluations)} markets evaluated, "
+            f"{len(top_markets)} top markets returned"
+        )
+
+        return result
+
+    def _generate_market_recommendation(self, top_markets: list[dict]) -> str:
+        """Generate a recommendation based on top markets.
+
+        Args:
+            top_markets: List of top market dictionaries
+
+        Returns:
+            Recommendation string
+        """
+        if not top_markets:
+            return "No markets meet the minimum probability threshold"
+
+        top = top_markets[0]
+        prob = top.get("probability", 0)
+        market_name = top.get("market_name", "Unknown")
+        best_outcome = top.get("best_outcome", "Unknown")
+
+        if prob >= 0.8:
+            return f"STRONG BET on {market_name} - {best_outcome} ({prob*100:.1f}% probability)"
+        elif prob >= 0.65:
+            return f"PLACE BET on {market_name} - {best_outcome} ({prob*100:.1f}% probability)"
+        elif prob >= 0.5:
+            return f"CONSIDER {market_name} - {best_outcome} ({prob*100:.1f}% probability)"
+        else:
+            return f"MARGINAL: {market_name} - {best_outcome} ({prob*100:.1f}% probability)"
 
     async def load_agent_tools(self) -> dict[str, list[Any]]:
         """
@@ -1167,3 +1320,539 @@ Focus on your specialized analysis approach based on your role.
             "quality_gate": "PASSED",
             "recommendation": "Prediction ready for user"
         }
+
+    async def build_accumulator(
+        self,
+        target_odds: float,
+        date: str | None = None,
+        min_probability: float = 0.65,
+        max_selections: int = 10,
+        league_ids: list[int] | None = None,
+        market_codes: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Build accumulator bet meeting target cumulative odds.
+
+        This method:
+        1. Gets fixtures for the specified date (default: today)
+        2. Evaluates markets for each fixture with odds (filtered if market_codes provided)
+        3. Picks top 1 probability market per fixture
+        4. Builds accumulator by selecting fixtures until cumulative odds >= target
+        5. Returns selections with fixture, market, outcome, probability, odds
+
+        Args:
+            target_odds: Target cumulative odds (e.g., 10.0 for "10 odds")
+            date: Date to evaluate (default: today, format: YYYY-MM-DD)
+            min_probability: Minimum probability threshold (default: 0.65)
+            max_selections: Maximum number of selections (default: 10)
+            league_ids: Optional list of league IDs to filter fixtures
+            market_codes: Optional list of market codes to evaluate.
+                         If None, evaluates all 44 markets.
+                         If provided, only evaluates and selects from
+                         these specific markets (e.g., ["BTTS", "1X2", "DC"]).
+
+        Returns:
+            Dictionary with:
+            - target_odds: The requested target
+            - achieved_odds: Actual cumulative odds achieved
+            - target_met: Whether target was achieved
+            - selection_count: Number of selections
+            - selections: List of selection dictionaries
+            - total_probability: Combined probability (product)
+            - recommendation: Bet recommendation string
+            - market_codes: The market codes used for filtering (if any)
+
+        Raises:
+            ValueError: If any market code is invalid
+
+        Example:
+            >>> # Build accumulator from all markets (original behavior)
+            >>> result = await orchestrator.build_accumulator(
+            ...     target_odds=10.0,
+            ...     min_probability=0.65
+            ... )
+
+            >>> # Build accumulator from BTTS only
+            >>> result = await orchestrator.build_accumulator(
+            ...     target_odds=5.0,
+            ...     market_codes=["BTTS"]
+            ... )
+
+            >>> # Build accumulator from specific markets
+            >>> result = await orchestrator.build_accumulator(
+            ...     target_odds=8.0,
+            ...     market_codes=["1X2", "DC", "DNB"],
+            ...     min_probability=0.70
+            ... )
+        """
+        from datetime import datetime as dt, timezone
+
+        market_filter_msg = f", markets={market_codes}" if market_codes else ""
+        self.logger.info(f"Building accumulator: target={target_odds} odds, min_prob={min_probability}{market_filter_msg}")
+
+        # Default date is today
+        if date is None:
+            date = dt.now(timezone.utc).strftime("%Y-%m-%d")
+
+        # Step 1: Get fixtures for the date
+        data_mcp = self.mcp_factory.create("data")
+
+        # Get API client for odds fetching
+        # Note: This requires the API-Football client to be configured
+        api_client = None
+        try:
+            from sipap_data_mcp.api.football_client import APIFootballClient
+            from sipap_data_mcp.cache.redis import RedisCache
+            import os
+
+            api_key = os.environ.get("API_FOOTBALL_KEY", "")
+            redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+
+            if api_key:
+                cache = RedisCache(url=redis_url)
+                await cache.connect()
+                api_client = APIFootballClient(api_key=api_key, cache=cache)
+                await api_client.connect()
+        except ImportError:
+            self.logger.warning("sipap_data_mcp not available, odds fetching disabled")
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize API client: {e}")
+
+        # Fetch fixtures from database/MCP
+        try:
+            fixtures_result = await data_mcp.call_tool(
+                "search_fixtures_by_date",
+                {"date": date, "league_ids": league_ids or []},
+            )
+            fixtures = fixtures_result.get("fixtures", []) if not isinstance(fixtures_result, Exception) else []
+        except Exception as e:
+            self.logger.warning(f"Failed to fetch fixtures: {e}")
+            fixtures = []
+
+        if not fixtures:
+            return {
+                "target_odds": target_odds,
+                "achieved_odds": 0.0,
+                "target_met": False,
+                "selection_count": 0,
+                "selections": [],
+                "total_probability": 0.0,
+                "recommendation": f"NO FIXTURES - No fixtures found for {date}",
+            }
+
+        # Initialize MarketEvaluator if needed
+        if self._market_evaluator is None:
+            self._market_evaluator = MarketEvaluator(data_mcp)
+
+        # Step 2: Process fixtures and build accumulator
+        selections: list[dict[str, Any]] = []
+        cumulative_odds = 1.0
+        cumulative_probability = 1.0
+        processed_fixtures = 0
+
+        self.logger.info(f"Processing {len(fixtures)} fixtures for accumulator")
+
+        for fixture in fixtures:
+            # Check if we've met the target
+            if cumulative_odds >= target_odds:
+                break
+            if len(selections) >= max_selections:
+                break
+
+            # Extract fixture details
+            fixture_id = fixture.get("id") or fixture.get("external_id")
+            external_id = fixture.get("external_id")
+            home_team_external_id = fixture.get("home_team_external_id")
+            away_team_external_id = fixture.get("away_team_external_id")
+            league_external_id = fixture.get("league_external_id")
+
+            # Skip if missing required IDs
+            if not all([external_id, home_team_external_id, away_team_external_id, league_external_id]):
+                self.logger.debug(f"Skipping fixture {fixture_id}: missing external IDs")
+                continue
+
+            processed_fixtures += 1
+
+            # Get team names
+            home_team = fixture.get("home_team")
+            away_team = fixture.get("away_team")
+            home_team_name = (
+                home_team if isinstance(home_team, str)
+                else (home_team.get("name", "Unknown") if isinstance(home_team, dict) else "Unknown")
+            )
+            away_team_name = (
+                away_team if isinstance(away_team, str)
+                else (away_team.get("name", "Unknown") if isinstance(away_team, dict) else "Unknown")
+            )
+
+            try:
+                # Evaluate markets for this fixture (filtered if market_codes provided)
+                if api_client:
+                    # Use evaluate_all_markets_with_odds for odds integration
+                    evaluations = await self._market_evaluator.evaluate_all_markets_with_odds(
+                        home_team_id=int(home_team_external_id),
+                        away_team_id=int(away_team_external_id),
+                        league_id=int(league_external_id),
+                        fixture_id=int(external_id),
+                        api_client=api_client,
+                        top_n=1,
+                        min_probability=min_probability,
+                        market_codes=market_codes,
+                    )
+                else:
+                    # Fallback: evaluate without odds
+                    evaluations = await self._market_evaluator.evaluate_all_markets(
+                        home_team_id=int(home_team_external_id),
+                        away_team_id=int(away_team_external_id),
+                        league_id=int(league_external_id),
+                        market_codes=market_codes,
+                    )
+
+                # Get top market meeting threshold
+                top_markets = self._market_evaluator.get_top_markets(
+                    evaluations=evaluations,
+                    top_n=1,
+                    min_probability=min_probability,
+                )
+
+                if not top_markets:
+                    self.logger.debug(f"No markets meet threshold for {home_team_name} vs {away_team_name}")
+                    continue
+
+                top = top_markets[0]
+                odds = top.get("best_odds")
+
+                # Skip if no odds available
+                if not odds or odds <= 1.0:
+                    self.logger.debug(f"No valid odds for {home_team_name} vs {away_team_name}")
+                    continue
+
+                # Add to accumulator
+                selection = {
+                    "fixture_id": str(fixture_id),
+                    "external_id": int(external_id),
+                    "fixture": f"{home_team_name} vs {away_team_name}",
+                    "scheduled_at": fixture.get("scheduled_at"),
+                    "league": fixture.get("league_name", fixture.get("league", "Unknown")),
+                    "market_code": top.get("market_code"),
+                    "market_name": top.get("market_name"),
+                    "outcome": top.get("best_outcome"),
+                    "probability": top.get("probability"),
+                    "odds": odds,
+                    "bookmaker": top.get("best_odds_bookmaker", "Unknown"),
+                }
+
+                selections.append(selection)
+                cumulative_odds *= odds
+                cumulative_probability *= top.get("probability", 0.5)
+
+                self.logger.info(
+                    f"Added: {home_team_name} vs {away_team_name} | "
+                    f"{top.get('best_outcome')} @ {odds} | "
+                    f"Cumulative: {cumulative_odds:.2f}"
+                )
+
+            except Exception as e:
+                self.logger.warning(f"Failed to evaluate {home_team_name} vs {away_team_name}: {e}")
+                continue
+
+        # Cleanup API client
+        if api_client:
+            try:
+                await api_client.close()
+            except Exception:
+                pass
+
+        # Step 3: Build response
+        target_met = cumulative_odds >= target_odds
+
+        result = {
+            "target_odds": target_odds,
+            "achieved_odds": round(cumulative_odds, 2),
+            "target_met": target_met,
+            "selection_count": len(selections),
+            "fixtures_processed": processed_fixtures,
+            "fixtures_available": len(fixtures),
+            "date": date,
+            "market_codes": market_codes,  # Include filter criteria
+            "selections": selections,
+            "total_probability": round(cumulative_probability, 4),
+            "recommendation": self._generate_accumulator_recommendation(
+                target_odds, cumulative_odds, cumulative_probability, len(selections)
+            ),
+        }
+
+        self.logger.info(
+            f"Accumulator built: {len(selections)} selections, "
+            f"{cumulative_odds:.2f} odds, {cumulative_probability*100:.1f}% combined probability"
+        )
+
+        return result
+
+    def _generate_accumulator_recommendation(
+        self,
+        target: float,
+        achieved: float,
+        probability: float,
+        count: int,
+    ) -> str:
+        """Generate recommendation for accumulator bet.
+
+        Args:
+            target: Target cumulative odds
+            achieved: Achieved cumulative odds
+            probability: Combined probability
+            count: Number of selections
+
+        Returns:
+            Recommendation string
+        """
+        if achieved < target:
+            return (
+                f"INCOMPLETE - Only achieved {achieved:.2f} odds from {count} selections. "
+                f"Need more fixtures to reach {target:.2f} target."
+            )
+        if probability >= 0.30:
+            return (
+                f"STRONG BET - {achieved:.2f} odds achieved with "
+                f"{probability*100:.1f}% combined probability from {count} selections"
+            )
+        if probability >= 0.15:
+            return (
+                f"PLACE BET - {achieved:.2f} odds achieved with "
+                f"{probability*100:.1f}% combined probability from {count} selections"
+            )
+        return (
+            f"RISKY BET - {achieved:.2f} odds achieved but only "
+            f"{probability*100:.1f}% combined probability from {count} selections"
+        )
+
+    async def get_filtered_fixtures(
+        self,
+        market_codes: list[str],
+        top_n: int = 10,
+        date: str | None = None,
+        min_probability: float = 0.60,
+        league_ids: list[int] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Get top N fixtures ranked by probability for specific markets.
+
+        This method evaluates ONLY the specified markets across all fixtures,
+        ranks them by probability, and returns the top N selections with odds.
+
+        Use this when users request specific market types, e.g.:
+        - "Give me 10 BTTS picks with high probability"
+        - "Show me the best Double Chance and Match Winner selections"
+
+        Args:
+            market_codes: List of market codes to evaluate (REQUIRED).
+                         E.g., ["BTTS"], ["1X2", "DC", "DNB"]
+            top_n: Number of top fixtures to return (default: 10)
+            date: Date to evaluate (default: today, format: YYYY-MM-DD)
+            min_probability: Minimum probability threshold (default: 0.60)
+            league_ids: Optional list of league IDs to filter fixtures
+
+        Returns:
+            Dictionary with:
+            - market_codes: The requested market codes
+            - total_fixtures: Number of fixtures evaluated
+            - total_evaluations: Number of market evaluations meeting threshold
+            - selection_count: Number of selections returned
+            - selections: Top N fixtures ranked by probability
+            - filters_applied: Summary of filtering criteria
+
+        Raises:
+            ValueError: If market_codes is empty or contains invalid codes
+
+        Examples:
+            >>> # Get top 10 BTTS Yes picks
+            >>> result = await orch.get_filtered_fixtures(
+            ...     market_codes=["BTTS"],
+            ...     top_n=10
+            ... )
+
+            >>> # Get top 5 Home Win or Double Chance picks
+            >>> result = await orch.get_filtered_fixtures(
+            ...     market_codes=["1X2", "DC"],
+            ...     top_n=5,
+            ...     min_probability=0.70
+            ... )
+
+            >>> # Get selections for specific markets from Premier League
+            >>> result = await orch.get_filtered_fixtures(
+            ...     market_codes=["BTTS", "OU2.5", "1X2"],
+            ...     top_n=10,
+            ...     league_ids=[39]  # Premier League
+            ... )
+        """
+        from datetime import datetime as dt, timezone
+
+        if not market_codes:
+            raise ValueError("market_codes is required and cannot be empty")
+
+        self.logger.info(
+            f"Getting filtered fixtures: markets={market_codes}, top_n={top_n}, "
+            f"min_prob={min_probability}"
+        )
+
+        # Default date is today
+        if date is None:
+            date = dt.now(timezone.utc).strftime("%Y-%m-%d")
+
+        # Step 1: Get fixtures for the date
+        data_mcp = self.mcp_factory.create("data")
+
+        # Get API client for odds fetching
+        api_client = None
+        try:
+            from sipap_data_mcp.api.football_client import APIFootballClient
+            from sipap_data_mcp.cache.redis import RedisCache
+            import os
+
+            api_key = os.environ.get("API_FOOTBALL_KEY", "")
+            redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+
+            if api_key:
+                cache = RedisCache(url=redis_url)
+                await cache.connect()
+                api_client = APIFootballClient(api_key=api_key, cache=cache)
+                await api_client.connect()
+        except ImportError:
+            self.logger.warning("sipap_data_mcp not available, odds fetching disabled")
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize API client: {e}")
+
+        # Fetch fixtures from database/MCP
+        try:
+            fixtures_result = await data_mcp.call_tool(
+                "search_fixtures_by_date",
+                {"date": date, "league_ids": league_ids or []},
+            )
+            fixtures = fixtures_result.get("fixtures", []) if not isinstance(fixtures_result, Exception) else []
+        except Exception as e:
+            self.logger.warning(f"Failed to fetch fixtures: {e}")
+            fixtures = []
+
+        if not fixtures:
+            return {
+                "market_codes": market_codes,
+                "total_fixtures": 0,
+                "total_evaluations": 0,
+                "selection_count": 0,
+                "selections": [],
+                "filters_applied": {
+                    "date": date,
+                    "min_probability": min_probability,
+                    "league_ids": league_ids,
+                    "market_codes": market_codes,
+                },
+            }
+
+        # Initialize MarketEvaluator if needed
+        if self._market_evaluator is None:
+            self._market_evaluator = MarketEvaluator(data_mcp)
+
+        # Step 2: Evaluate all fixtures with filtered markets
+        all_selections: list[dict[str, Any]] = []
+
+        self.logger.info(f"Evaluating {len(fixtures)} fixtures for markets: {market_codes}")
+
+        for fixture in fixtures:
+            # Extract fixture details
+            fixture_id = fixture.get("id") or fixture.get("external_id")
+            external_id = fixture.get("external_id")
+            home_team_external_id = fixture.get("home_team_external_id")
+            away_team_external_id = fixture.get("away_team_external_id")
+            league_external_id = fixture.get("league_external_id")
+
+            # Skip if missing required IDs
+            if not all([external_id, home_team_external_id, away_team_external_id, league_external_id]):
+                continue
+
+            # Get team names
+            home_team = fixture.get("home_team")
+            away_team = fixture.get("away_team")
+            home_team_name = (
+                home_team if isinstance(home_team, str)
+                else (home_team.get("name", "Unknown") if isinstance(home_team, dict) else "Unknown")
+            )
+            away_team_name = (
+                away_team if isinstance(away_team, str)
+                else (away_team.get("name", "Unknown") if isinstance(away_team, dict) else "Unknown")
+            )
+
+            try:
+                # Evaluate only the filtered markets for this fixture
+                if api_client:
+                    evaluations = await self._market_evaluator.evaluate_all_markets_with_odds(
+                        home_team_id=int(home_team_external_id),
+                        away_team_id=int(away_team_external_id),
+                        league_id=int(league_external_id),
+                        fixture_id=int(external_id),
+                        api_client=api_client,
+                        top_n=len(market_codes),  # Get all filtered markets
+                        min_probability=0.0,  # Don't filter here, filter after
+                        market_codes=market_codes,
+                    )
+                else:
+                    evaluations = await self._market_evaluator.evaluate_all_markets(
+                        home_team_id=int(home_team_external_id),
+                        away_team_id=int(away_team_external_id),
+                        league_id=int(league_external_id),
+                        market_codes=market_codes,
+                    )
+
+                # Add all evaluations meeting the probability threshold
+                for evaluation in evaluations:
+                    if evaluation.best_outcome.weighted_probability >= min_probability:
+                        all_selections.append({
+                            "fixture_id": str(fixture_id),
+                            "external_id": int(external_id),
+                            "fixture": f"{home_team_name} vs {away_team_name}",
+                            "scheduled_at": fixture.get("scheduled_at"),
+                            "league": fixture.get("league_name", fixture.get("league", "Unknown")),
+                            "market_code": evaluation.market_code,
+                            "market_name": evaluation.market_name,
+                            "outcome": evaluation.best_outcome.outcome_code,
+                            "probability": evaluation.best_outcome.weighted_probability,
+                            "confidence": evaluation.best_outcome.confidence,
+                            "odds": evaluation.best_odds,
+                            "bookmaker": evaluation.best_odds_bookmaker,
+                        })
+
+            except Exception as e:
+                self.logger.warning(f"Failed to evaluate {home_team_name} vs {away_team_name}: {e}")
+                continue
+
+        # Cleanup API client
+        if api_client:
+            try:
+                await api_client.close()
+            except Exception:
+                pass
+
+        # Step 3: Sort by probability (highest first) and take top N
+        all_selections.sort(key=lambda x: x["probability"], reverse=True)
+        top_selections = all_selections[:top_n]
+
+        result = {
+            "market_codes": market_codes,
+            "total_fixtures": len(fixtures),
+            "total_evaluations": len(all_selections),
+            "selection_count": len(top_selections),
+            "selections": top_selections,
+            "filters_applied": {
+                "date": date,
+                "min_probability": min_probability,
+                "league_ids": league_ids,
+                "market_codes": market_codes,
+            },
+        }
+
+        self.logger.info(
+            f"Filtered fixtures: {len(top_selections)}/{len(all_selections)} selections "
+            f"from {len(fixtures)} fixtures for markets {market_codes}"
+        )
+
+        return result
