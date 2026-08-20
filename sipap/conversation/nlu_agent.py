@@ -96,7 +96,7 @@ class RequestIntent(BaseModel):
 
     leagues: list[LeagueEntity] | None = None  # [LeagueEntity(id=140, name="La Liga", country="Spain"), ...]
     date_range: dict[str, str] | None = None  # {"start": "2026-08-03", "end": "2026-08-10"}
-    markets: list[str] | None = None  # INTERNAL USE ONLY - Not extracted from user messages
+    markets: list[str] | None = None  # Market codes extracted by Claude NLU (e.g., ["BTTS", "1X2"])
     quality_threshold: Literal["highest", "high", "medium"] | None = None
     sort_by: Literal["ev", "confidence", "probability"] | None = "ev"
 
@@ -1204,6 +1204,22 @@ CRITICAL: Extract leagues EXACTLY as user says them:
         # Extract target odds
         target_odds = intent_data.get("target_odds")
 
+        # Extract markets from Claude's response (intelligent extraction)
+        # Claude understands natural language like "both teams to score" → BTTS
+        markets = intent_data.get("markets")
+        if markets:
+            # Validate market codes against registry
+            from sipap.sports.soccer.markets import REGISTRY
+            valid_codes = {m.code for m in REGISTRY.get_all()}
+            markets = [m for m in markets if m in valid_codes]
+            if not markets:
+                markets = None  # No valid markets extracted
+            else:
+                self.logger.info(
+                    f"Claude NLU extracted markets: {markets}",
+                    extra={"original_query": original_query[:50]}
+                )
+
         # Build entities dict with API-Football IDs for traceability
         entities = {
             "leagues": leagues,  # list[LeagueEntity] | None
@@ -1212,6 +1228,7 @@ CRITICAL: Extract leagues EXACTLY as user says them:
             "teams": teams,
             "date_range": date_range,
             "target_odds": target_odds,
+            "markets": markets,  # Market codes from Claude
             "claude_reasoning": intent_data.get("reasoning", "")
         }
 
@@ -1223,6 +1240,7 @@ CRITICAL: Extract leagues EXACTLY as user says them:
             home_team=home_team,
             away_team=away_team,
             target_odds=target_odds,
+            markets=markets,  # Include markets from Claude's intelligent extraction
             original_query=original_query,
             extracted_entities=entities,
         )
