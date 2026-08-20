@@ -1,7 +1,14 @@
-"""Unit tests verifying NLU does NOT extract markets from user messages.
+"""Unit tests verifying NLU hybrid market extraction behavior.
 
-Markets are NOT part of user input - they are system decisions based on EV/confidence.
-Users express intent and quality, system picks best market per fixture.
+HYBRID APPROACH (updated 2026-08-19):
+- Markets ARE extracted when explicitly mentioned (e.g., "BTTS picks", "1X2 selections")
+- Markets ARE extracted from natural language aliases (e.g., "both teams to score" -> BTTS)
+- Markets are NOT extracted when ONLY quality terms are present (e.g., "20 sure odds")
+
+This file focuses on testing that QUALITY-ONLY requests do NOT extract markets,
+allowing the system to intelligently select the best market per fixture.
+
+See test_nlu_market_extraction.py for comprehensive market extraction tests.
 
 NOTE: Some tests that require league extraction or quality threshold parsing
 are marked as skip because they depend on Claude NLU (AWS Bedrock) or improved
@@ -19,7 +26,12 @@ NEEDS_FULL_NLU = pytest.mark.skip(
 
 
 class TestNLUNoMarketExtraction:
-    """Test that NLU does NOT extract markets from user messages."""
+    """Test that NLU does NOT extract markets from QUALITY-ONLY messages.
+
+    Hybrid approach: Markets are only extracted when explicitly mentioned
+    or when natural language aliases are used. Quality-only requests
+    (e.g., "20 sure odds") should have markets=None.
+    """
 
     @pytest.fixture
     def nlu(self):
@@ -60,21 +72,25 @@ class TestNLUNoMarketExtraction:
             assert "La Liga" in league_names or "LaLiga" in league_names
 
     @pytest.mark.asyncio
-    async def test_markets_not_extracted_even_if_market_terms_present(self, nlu):
-        """Test that even if message contains market-like terms, markets remain None.
+    async def test_markets_not_extracted_from_quality_only_terms(self, nlu):
+        """Test that quality-only terms do NOT extract markets.
 
-        Users might say "both teams score" or "over goals" as description,
-        but system should NOT interpret this as market selection.
+        Users expressing quality requirements without market-specific language
+        should get markets=None, allowing system to select best market.
+
+        NOTE: "both teams score" and "over 2.5" DO extract markets now (hybrid approach).
+        These tests focus on quality terms WITHOUT market references.
         """
         messages = [
-            "Show me games where both teams will score",
-            "I want high-scoring matches with many goals",
             "Give me safe odds with low risk",
+            "I need the highest quality selections",
+            "Best possible outcome predictions",
+            "Show me very confident picks",
         ]
 
         for message in messages:
             intent = await nlu.parse_user_message(message)
-            assert intent.markets is None, f"Markets should NOT be extracted from: {message}"
+            assert intent.markets is None, f"Markets should NOT be extracted from quality-only: {message}"
 
     @pytest.mark.asyncio
     async def test_markets_field_reserved_for_internal_use(self, nlu):
@@ -94,7 +110,11 @@ class TestNLUNoMarketExtraction:
 
 
 class TestNLUFocusOnIntent:
-    """Test that NLU focuses on user intent, not market selection."""
+    """Test that NLU focuses on extracting intent and quality.
+
+    These tests verify that core NLU functionality (intent, quality, leagues, dates)
+    works correctly. Markets should be None for quality-only requests.
+    """
 
     @pytest.fixture
     def nlu(self):

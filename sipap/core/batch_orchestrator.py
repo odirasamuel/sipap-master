@@ -386,8 +386,19 @@ class BatchOrchestrator:
                 "quality_threshold": intent.quality_threshold,
                 "leagues": intent.leagues,
                 "date_range": intent.date_range,
+                "markets": intent.markets,  # NEW: Log market filter if present
             },
         )
+
+        # NEW: Check for market-filtered request
+        # If user specified specific markets (e.g., "BTTS picks", "1X2 selections"),
+        # route to get_filtered_fixtures() for targeted market evaluation
+        if intent.markets:
+            self.logger.info(
+                f"Market-filtered request detected: {intent.markets}. "
+                "Routing to get_filtered_fixtures for targeted evaluation."
+            )
+            return await self._process_market_filtered_request(intent, user_id)
 
         # Step 0: Warm up MCP servers (trigger Lambda cold starts)
         # This prevents circuit breaker trips from cold start timeouts
@@ -556,6 +567,130 @@ class BatchOrchestrator:
         )
 
         return result
+
+    async def _process_market_filtered_request(
+        self,
+        intent: RequestIntent,
+        user_id: str,
+    ) -> dict[str, Any]:
+        """
+        Process market-filtered prediction request.
+
+        When user specifies specific markets (e.g., "BTTS picks", "1X2 and DC selections"),
+        route to SoccerOrchestrator.get_filtered_fixtures() for targeted market evaluation.
+
+        Args:
+            intent: Parsed user intent with markets specified
+            user_id: User identifier
+
+        Returns:
+            Dictionary with market-filtered selections:
+            {
+                "market_codes": ["BTTS"],
+                "total_fixtures": 45,
+                "selection_count": 10,
+                "selections": [...],
+                "filters_applied": {...},
+                "warning": None,
+                "error": None,
+            }
+
+        Example:
+            >>> intent = RequestIntent(
+            ...     intent_type="batch_prediction",
+            ...     markets=["BTTS", "OU2.5"],
+            ...     quality_threshold="highest"
+            ... )
+            >>> result = await orchestrator._process_market_filtered_request(intent, "user_id")
+            >>> print(result["selections"][0]["market_code"])
+            "BTTS"  # Only BTTS or OU2.5 markets in selections
+        """
+        # Get soccer orchestrator from main orchestrator
+        soccer_orchestrator = self.orchestrator._orchestrators.get("soccer")
+        if not soccer_orchestrator:
+            self.logger.error("SoccerOrchestrator not available")
+            return {
+                "market_codes": intent.markets,
+                "total_fixtures": 0,
+                "selection_count": 0,
+                "selections": [],
+                "filters_applied": {
+                    "markets": intent.markets,
+                    "leagues": intent.leagues,
+                    "date_range": intent.date_range,
+                },
+                "warning": None,
+                "error": "Soccer orchestrator not available",
+            }
+
+        # Determine parameters
+        quality_threshold = intent.quality_threshold or "high"
+        thresholds = self.quality_thresholds.get(
+            quality_threshold, self.quality_thresholds["high"]
+        )
+        min_probability = thresholds["min_confidence"]
+
+        # Determine top_n from intent
+        top_n = intent.num_matches or 10  # Default to 10 selections
+
+        # Get league IDs if leagues specified
+        league_ids = None
+        if intent.leagues:
+            league_ids = [league.id for league in intent.leagues]
+
+        # Determine date
+        date_str = None
+        if intent.date_range:
+            date_str = intent.date_range.get("start")
+
+        self.logger.info(
+            f"Calling get_filtered_fixtures with markets={intent.markets}, "
+            f"top_n={top_n}, min_probability={min_probability}, league_ids={league_ids}"
+        )
+
+        try:
+            result = await soccer_orchestrator.get_filtered_fixtures(
+                market_codes=intent.markets,
+                top_n=top_n,
+                date=date_str,
+                min_probability=min_probability,
+                league_ids=league_ids,
+            )
+
+            # Add quality metadata
+            result["filters_applied"]["quality_threshold"] = quality_threshold
+            result["filters_applied"]["thresholds"] = thresholds
+            result["warning"] = None
+            result["error"] = None
+
+            self.logger.info(
+                f"Market-filtered request complete: {result['selection_count']} "
+                f"selections from {result['total_fixtures']} fixtures",
+                extra={
+                    "user_id": user_id,
+                    "market_codes": intent.markets,
+                    "selection_count": result["selection_count"],
+                },
+            )
+
+            return result
+
+        except Exception as e:
+            self.logger.error(f"Market-filtered request failed: {e}", exc_info=True)
+            return {
+                "market_codes": intent.markets,
+                "total_fixtures": 0,
+                "selection_count": 0,
+                "selections": [],
+                "filters_applied": {
+                    "markets": intent.markets,
+                    "leagues": intent.leagues,
+                    "date_range": intent.date_range,
+                    "quality_threshold": quality_threshold,
+                },
+                "warning": None,
+                "error": str(e),
+            }
 
     async def _process_with_incremental_expansion(
         self,

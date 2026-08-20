@@ -575,19 +575,27 @@ class NLUAgent:
                 extra={"query": message[:50], "league_ids": [l.id for l in leagues]}
             )
 
-        # NOTE: Markets are NOT extracted from user messages
-        # Users don't specify markets - they only express intent and quality requirements.
-        # The system intelligently selects the best market per fixture by:
-        # 1. Evaluating multiple markets (1X2, BTTS, OU2.5, DC, etc.)
-        # 2. Comparing EV and confidence across markets
-        # 3. Selecting the market with highest expected value
-        # 4. Including market explanation in response ("BTTS Yes @ 2.5 odds")
+        # HYBRID MARKET EXTRACTION:
+        # Users CAN specify markets explicitly (e.g., "BTTS picks", "1X2 selections")
+        # or via natural language (e.g., "both teams to score", "over 2.5 goals").
+        # If no markets detected, system intelligently selects the best market per fixture.
         #
-        # Example:
+        # Examples:
         #   User: "I need 20 odds with highest positive outcome"
-        #   NLU: target_odds=20, quality="highest", markets=None
-        #   BatchOrchestrator: For each fixture, evaluate all markets, pick best
-        #   Response: "Arsenal vs Chelsea - BTTS Yes @ 2.5 odds (72% conf, +10% EV)"
+        #   NLU: target_odds=20, quality="highest", markets=None (system decides)
+        #
+        #   User: "Give me 10 BTTS picks"
+        #   NLU: num_matches=10, markets=["BTTS"] (user specified)
+        #
+        #   User: "20 sure BTTS odds in Premier League"
+        #   NLU: target_odds=20, quality="highest", markets=["BTTS"], leagues=[39]
+        markets = self._extract_market_codes(message)
+        if markets:
+            entities["markets"] = markets
+            self.logger.debug(
+                f"Extracted market codes from user message: {markets}",
+                extra={"query": message[:50], "markets": markets}
+            )
 
         # Extract date range
         date_range = None
@@ -779,13 +787,66 @@ class NLUAgent:
             accumulation_mode=accumulation_mode,
             leagues=leagues if leagues else None,
             date_range=date_range,
-            markets=None,  # NOT extracted from user messages - system decides best market
+            markets=markets,  # Extracted from user messages (hybrid approach) or None (system decides)
             quality_threshold=quality_threshold,  # type: ignore[arg-type]
             home_team=home_team,
             away_team=away_team,
             original_query=message,
             extracted_entities=entities,
         )
+
+    def _extract_market_codes(self, message: str) -> list[str] | None:
+        """Extract market codes from user message using market registry aliases.
+
+        Hybrid approach for market extraction:
+        - Explicit codes (BTTS, 1X2, OU2.5) are extracted
+        - Natural language aliases ("both teams to score") are mapped to codes
+        - Quality-only requests ("sure odds") return None (system decides)
+
+        Args:
+            message: User's original message
+
+        Returns:
+            List of market codes (e.g., ["BTTS", "OU2.5"]) or None if no markets detected
+
+        Examples:
+            >>> _extract_market_codes("Give me 10 BTTS picks")
+            ["BTTS"]
+
+            >>> _extract_market_codes("fixtures where both teams will score")
+            ["BTTS"]
+
+            >>> _extract_market_codes("BTTS and over 2.5 predictions")
+            ["BTTS", "OU2.5"]
+
+            >>> _extract_market_codes("20 sure odds")
+            None  # No market specified, system will decide
+        """
+        from sipap.sports.soccer.markets import REGISTRY
+
+        message_lower = message.lower()
+        detected_markets: list[str] = []
+
+        # Check explicit market codes and natural language aliases
+        for market in REGISTRY.get_all():
+            # Check for explicit market code (case-insensitive)
+            # Use word boundary to avoid false positives (e.g., "dc" in "predictions")
+            code_lower = market.code.lower()
+            # Check for exact code match with word boundaries
+            if re.search(rf'\b{re.escape(code_lower)}\b', message_lower):
+                if market.code not in detected_markets:
+                    detected_markets.append(market.code)
+                    continue  # Skip alias check if code found
+
+            # Check for natural language aliases
+            for alias in market.aliases:
+                alias_lower = alias.lower()
+                if alias_lower in message_lower:
+                    if market.code not in detected_markets:
+                        detected_markets.append(market.code)
+                    break  # Found an alias, no need to check more
+
+        return detected_markets if detected_markets else None
 
     def _extract_leagues_with_context(self, query: str) -> list[dict[str, Any]]:
         """Extract structured league data with country context and competition type.
@@ -965,6 +1026,18 @@ ENTITY EXTRACTION:
 - date_range: Extract dates (today = current date, tomorrow = next day, etc.)
 - teams: Extract team names if mentioned
 - target_odds: Extract numbers when user says "X odds" or "X matches"
+- markets: Extract betting market codes when user specifies them (NEW)
+  * Explicit codes: "BTTS", "1X2", "OU2.5", "DC", "DNB"
+  * Natural language aliases map to codes:
+    - "both teams to score", "both score", "gg" → "BTTS"
+    - "match result", "winner", "home win", "away win" → "1X2"
+    - "double chance" → "DC"
+    - "draw no bet" → "DNB"
+    - "over 2.5", "under 2.5", "over goals" → "OU2.5"
+    - "over 1.5", "under 1.5" → "OU1.5"
+    - "over 3.5", "under 3.5" → "OU3.5"
+  * Multiple markets: "BTTS and over 2.5" → ["BTTS", "OU2.5"]
+  * If user ONLY mentions quality ("sure odds") WITHOUT markets, set markets=null (system decides)
 
 IMPORTANT:
 - "Firstly" is just a discourse marker - ignore it, focus on the actual intent
@@ -995,8 +1068,16 @@ Return JSON format:
     "teams": {{"home": "team1", "away": "team2"}},
     "date_range": {{"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}},
     "target_odds": null,
+    "markets": ["BTTS", "1X2"],
     "reasoning": "brief explanation"
 }}
+
+MARKET EXTRACTION EXAMPLES:
+- "Give me 10 BTTS picks" → markets: ["BTTS"]
+- "Show me fixtures where both teams will score" → markets: ["BTTS"]
+- "1X2 and BTTS predictions" → markets: ["1X2", "BTTS"]
+- "20 sure odds" → markets: null (user only specified quality, not market)
+- "Double Chance selections for today" → markets: ["DC"]
 
 CRITICAL: Extract leagues EXACTLY as user says them:
 - "Belarus league results" → leagues: ["Belarus league"]
