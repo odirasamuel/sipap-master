@@ -663,13 +663,24 @@ class BatchOrchestrator:
             result["warning"] = None
             result["error"] = None
 
+            # Calculate accumulated_odds from selections (required by _handle_batch_prediction)
+            accumulated_odds = 1.0
+            for selection in result.get("selections", []):
+                odds = selection.get("odds", 1.0)
+                if odds and odds > 1.0:
+                    accumulated_odds *= odds
+            result["accumulated_odds"] = round(accumulated_odds, 2)
+            result["target_odds"] = intent.target_odds or 20.0
+
             self.logger.info(
                 f"Market-filtered request complete: {result['selection_count']} "
-                f"selections from {result['total_fixtures']} fixtures",
+                f"selections from {result['total_fixtures']} fixtures "
+                f"(accumulated_odds: {result['accumulated_odds']:.2f})",
                 extra={
                     "user_id": user_id,
                     "market_codes": intent.markets,
                     "selection_count": result["selection_count"],
+                    "accumulated_odds": result["accumulated_odds"],
                 },
             )
 
@@ -682,6 +693,8 @@ class BatchOrchestrator:
                 "total_fixtures": 0,
                 "selection_count": 0,
                 "selections": [],
+                "accumulated_odds": 0.0,
+                "target_odds": intent.target_odds or 20.0,
                 "filters_applied": {
                     "markets": intent.markets,
                     "leagues": intent.leagues,

@@ -517,21 +517,25 @@ class MarketEvaluator:
             except Exception as e:
                 logger.warning(f"Failed to fetch odds for {market_code}: {e}")
 
-        # Fetch odds in parallel (batch to avoid rate limits)
-        batch_size = 5
-        for i in range(0, len(evaluations), batch_size):
-            batch = evaluations[i : i + batch_size]
-            await asyncio.gather(*[fetch_odds(e) for e in batch])
+        # Fetch odds SEQUENTIALLY with rate limiting delay
+        RATE_LIMIT_DELAY = 0.15  # 150ms between calls
+        for idx, evaluation in enumerate(evaluations):
+            await fetch_odds(evaluation)
+            # Add delay between calls (except after the last one)
+            if idx < len(evaluations) - 1:
+                await asyncio.sleep(RATE_LIMIT_DELAY)
 
     # =========================================================================
     # Phase 1: Data Fetching
     # =========================================================================
 
     async def _fetch_all_tool_data(self) -> dict[str, ToolData]:
-        """Fetch all required tool data with parallel calls.
+        """Fetch all required tool data with sequential calls.
 
-        Makes 17 parallel MCP calls to fetch all data needed for 44 markets.
+        Makes 17 sequential MCP calls with rate limiting to avoid API throttling.
         Results are cached for reuse across market evaluations.
+
+        Rate limiting: 150ms delay between calls to stay under API-Football limits.
 
         Returns:
             Dictionary mapping tool keys to ToolData objects
@@ -705,25 +709,29 @@ class MarketEvaluator:
                 logger.warning(f"Tool {tool_name} failed: {e}")
                 return key, ToolData(error=str(e))
 
-        # Execute all calls in parallel
-        tasks = [
-            call_tool(key, tool_name, params)
-            for key, (tool_name, params) in tool_calls.items()
-        ]
-
-        completed = await asyncio.gather(*tasks, return_exceptions=True)
+        # Execute calls SEQUENTIALLY with rate limiting delay
+        # This prevents API-Football 429 rate limiting errors
+        RATE_LIMIT_DELAY = 0.15  # 150ms between calls
 
         results: dict[str, ToolData] = {}
-        for item in completed:
-            if isinstance(item, Exception):
-                logger.error(f"Task failed with exception: {item}")
-                continue
-            if isinstance(item, tuple) and len(item) == 2:
-                key, tool_data = item
-                results[key] = tool_data
-                self._tool_cache[key] = tool_data
+        tool_items = list(tool_calls.items())
+        total_tools = len(tool_items)
 
-        logger.info(f"Fetched data from {len(results)} tools")
+        for idx, (key, (tool_name, params)) in enumerate(tool_items):
+            try:
+                result_key, tool_data = await call_tool(key, tool_name, params)
+                results[result_key] = tool_data
+                self._tool_cache[result_key] = tool_data
+
+                # Add delay between calls (except after the last one)
+                if idx < total_tools - 1:
+                    await asyncio.sleep(RATE_LIMIT_DELAY)
+
+            except Exception as e:
+                logger.error(f"Tool {tool_name} failed with exception: {e}")
+                results[key] = ToolData(error=str(e))
+
+        logger.info(f"Fetched data from {len(results)} tools (sequential)")
         return results
 
     # =========================================================================

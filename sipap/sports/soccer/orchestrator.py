@@ -1452,15 +1452,20 @@ Focus on your specialized analysis approach based on your role.
         if self._market_evaluator is None:
             self._market_evaluator = MarketEvaluator(data_mcp)
 
-        # Step 2: Process fixtures and build accumulator
+        # Step 2: Process fixtures and build accumulator (SEQUENTIALLY)
+        # Process one fixture at a time to avoid API rate limiting
         selections: list[dict[str, Any]] = []
         cumulative_odds = 1.0
         cumulative_probability = 1.0
         processed_fixtures = 0
+        total_fixtures = len(fixtures)
+        FIXTURE_DELAY = 0.5  # 500ms delay between fixtures for rate limiting
 
-        self.logger.info(f"Processing {len(fixtures)} fixtures for accumulator")
+        self.logger.info(
+            f"Processing {total_fixtures} fixtures SEQUENTIALLY for accumulator"
+        )
 
-        for fixture in fixtures:
+        for fixture_idx, fixture in enumerate(fixtures):
             # Check if we've met the target
             if cumulative_odds >= target_odds:
                 break
@@ -1557,14 +1562,17 @@ Focus on your specialized analysis approach based on your role.
                 cumulative_probability *= top.get("probability", 0.5)
 
                 self.logger.info(
-                    f"Added: {home_team_name} vs {away_team_name} | "
+                    f"Fixture {fixture_idx + 1}/{total_fixtures} - Added: {home_team_name} vs {away_team_name} | "
                     f"{top.get('best_outcome')} @ {odds} | "
                     f"Cumulative: {cumulative_odds:.2f}"
                 )
 
             except Exception as e:
                 self.logger.warning(f"Failed to evaluate {home_team_name} vs {away_team_name}: {e}")
-                continue
+
+            # Add delay between fixtures (except after the last one) for rate limiting
+            if fixture_idx < total_fixtures - 1:
+                await asyncio.sleep(FIXTURE_DELAY)
 
         # Cleanup API client
         if api_client:
@@ -1768,12 +1776,17 @@ Focus on your specialized analysis approach based on your role.
         if self._market_evaluator is None:
             self._market_evaluator = MarketEvaluator(data_mcp)
 
-        # Step 2: Evaluate all fixtures with filtered markets
+        # Step 2: Evaluate all fixtures with filtered markets (SEQUENTIALLY)
+        # Process one fixture at a time to avoid API rate limiting
         all_selections: list[dict[str, Any]] = []
+        total_fixtures = len(fixtures)
+        FIXTURE_DELAY = 0.5  # 500ms delay between fixtures for rate limiting
 
-        self.logger.info(f"Evaluating {len(fixtures)} fixtures for markets: {market_codes}")
+        self.logger.info(
+            f"Evaluating {total_fixtures} fixtures SEQUENTIALLY for markets: {market_codes}"
+        )
 
-        for fixture in fixtures:
+        for fixture_idx, fixture in enumerate(fixtures):
             # Extract fixture details
             # Support both database format (external_id) and API format (id)
             fixture_id = fixture.get("id") or fixture.get("external_id")
@@ -1838,9 +1851,19 @@ Focus on your specialized analysis approach based on your role.
                             "bookmaker": evaluation.best_odds_bookmaker,
                         })
 
+                # Log progress after successful evaluation
+                self.logger.info(
+                    f"Fixture {fixture_idx + 1}/{total_fixtures} evaluated: "
+                    f"{home_team_name} vs {away_team_name} - {len(evaluations)} markets"
+                )
+
             except Exception as e:
                 self.logger.warning(f"Failed to evaluate {home_team_name} vs {away_team_name}: {e}")
                 continue
+
+            # Add delay between fixtures (except after the last one) for rate limiting
+            if fixture_idx < total_fixtures - 1:
+                await asyncio.sleep(FIXTURE_DELAY)
 
         # Cleanup API client
         if api_client:
