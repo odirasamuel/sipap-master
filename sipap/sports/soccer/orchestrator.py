@@ -1421,8 +1421,13 @@ Focus on your specialized analysis approach based on your role.
         # Fetch fixtures from database/MCP
         try:
             fixtures_result = await data_mcp.call_tool(
-                "search_fixtures_by_date",
-                {"date": date, "league_ids": league_ids or []},
+                "search_fixtures",
+                {
+                    "date_from": date,
+                    "date_to": date,
+                    "league_ids": league_ids or [],
+                    "has_odds": True,
+                },
             )
             fixtures = fixtures_result.get("fixtures", []) if not isinstance(fixtures_result, Exception) else []
         except Exception as e:
@@ -1726,8 +1731,13 @@ Focus on your specialized analysis approach based on your role.
         # Fetch fixtures from database/MCP
         try:
             fixtures_result = await data_mcp.call_tool(
-                "search_fixtures_by_date",
-                {"date": date, "league_ids": league_ids or []},
+                "search_fixtures",
+                {
+                    "date_from": date,
+                    "date_to": date,
+                    "league_ids": league_ids or [],
+                    "has_odds": True,
+                },
             )
             fixtures = fixtures_result.get("fixtures", []) if not isinstance(fixtures_result, Exception) else []
         except Exception as e:
