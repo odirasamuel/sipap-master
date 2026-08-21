@@ -40,8 +40,134 @@ from sipap.core.errors import ErrorType, classify_error
 from sipap.core.heartbeat import Heartbeat
 from sipap.core.orchestrator import MainOrchestrator
 from sipap.integrations.twilio import TwilioWhatsAppClient
+from sipap_common.cache.redis_adapter import RedisCache
 
 logger = logging.getLogger(__name__)
+
+
+class HeartbeatKeeper:
+    """Background thread to keep heartbeat alive during long processing.
+
+    The ECS health check monitors heartbeat file age (default: 30 seconds max).
+    During long processing (e.g., batch predictions taking 5+ minutes),
+    the heartbeat must be updated periodically to prevent ECS from killing the task.
+
+    This class runs a background thread that updates the heartbeat every `interval`
+    seconds while processing is ongoing.
+
+    Example:
+        >>> heartbeat_keeper = HeartbeatKeeper(heartbeat, interval=10)
+        >>> heartbeat_keeper.start(message_id="msg-123")
+        >>> # ... long processing ...
+        >>> heartbeat_keeper.stop()
+    """
+
+    def __init__(self, heartbeat: Heartbeat, interval: int = 10):
+        """Initialize heartbeat keeper.
+
+        Args:
+            heartbeat: Heartbeat instance to update
+            interval: Seconds between heartbeat updates (default: 10)
+        """
+        self.heartbeat = heartbeat
+        self.interval = interval
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._current_message_id: str | None = None
+
+    def start(self, message_id: str) -> None:
+        """Start keeping heartbeat alive for a message.
+
+        Args:
+            message_id: SQS message ID being processed
+        """
+        self._current_message_id = message_id
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        logger.debug(f"HeartbeatKeeper started for message {message_id}")
+
+    def stop(self) -> None:
+        """Stop the heartbeat keeper."""
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=2)
+        logger.debug("HeartbeatKeeper stopped")
+
+    def _run(self) -> None:
+        """Background thread that updates heartbeat periodically."""
+        while not self._stop_event.is_set():
+            try:
+                self.heartbeat.record_processing(self._current_message_id)
+            except Exception as e:
+                logger.warning(f"HeartbeatKeeper failed to update heartbeat: {e}")
+            self._stop_event.wait(self.interval)
+
+
+class MessageDeduplicator:
+    """Prevent duplicate message processing using Redis.
+
+    When a task is killed mid-processing (e.g., by ECS health check), the SQS
+    message may not have been deleted. After the visibility timeout, another
+    task picks it up and processes it again, causing duplicate responses.
+
+    This class tracks processed MessageSids in Redis to prevent duplicates.
+
+    Example:
+        >>> deduplicator = MessageDeduplicator(redis_client, ttl_seconds=3600)
+        >>> if deduplicator.is_processed("SM123"):
+        ...     print("Already processed, skipping")
+        ... else:
+        ...     # process message
+        ...     deduplicator.mark_processed("SM123")
+    """
+
+    def __init__(self, redis_client: RedisCache | None, ttl_seconds: int = 3600):
+        """Initialize message deduplicator.
+
+        Args:
+            redis_client: Redis cache client (None to disable deduplication)
+            ttl_seconds: Time-to-live for processed message keys (default: 1 hour)
+        """
+        self.redis = redis_client
+        self.ttl = ttl_seconds
+        self.key_prefix = "sipap:processed:"
+
+    def is_processed(self, message_sid: str) -> bool:
+        """Check if message was already processed.
+
+        Args:
+            message_sid: Twilio message SID (e.g., "SM...")
+
+        Returns:
+            True if message was already processed, False otherwise
+        """
+        if not self.redis or not message_sid:
+            return False
+
+        try:
+            key = f"{self.key_prefix}{message_sid}"
+            result = self.redis.get(key)
+            return result is not None
+        except Exception as e:
+            logger.warning(f"Deduplication check failed: {e}")
+            return False  # Allow processing on Redis failure
+
+    def mark_processed(self, message_sid: str) -> None:
+        """Mark message as processed with TTL.
+
+        Args:
+            message_sid: Twilio message SID to mark as processed
+        """
+        if not self.redis or not message_sid:
+            return
+
+        try:
+            key = f"{self.key_prefix}{message_sid}"
+            self.redis.set(key, "1", ttl=self.ttl)
+            logger.debug(f"Marked message {message_sid} as processed (TTL: {self.ttl}s)")
+        except Exception as e:
+            logger.warning(f"Failed to mark message as processed: {e}")
 
 
 def setup_signal_handlers(shutdown_event: threading.Event) -> None:
@@ -316,16 +442,20 @@ async def process_message(
     sqs_adapter: SQSAdapter,
     heartbeat: Heartbeat,
     twilio_client: TwilioWhatsAppClient | None,
+    deduplicator: MessageDeduplicator | None = None,
 ) -> bool:
     """Process a single SQS message.
 
     Steps:
-    1. Update heartbeat (processing)
-    2. Parse WhatsApp message
-    3. Generate prediction
-    4. Send WhatsApp response (or log in dry-run mode)
-    5. Delete message from queue (success)
-    6. Update heartbeat (success)
+    1. Check for duplicate (skip if already processed)
+    2. Start background heartbeat keeper
+    3. Parse WhatsApp message
+    4. Generate prediction
+    5. Send WhatsApp response (or log in dry-run mode)
+    6. Mark as processed (for deduplication)
+    7. Delete message from queue (success)
+    8. Stop heartbeat keeper
+    9. Update heartbeat (success)
 
     On error:
     - Permanent: Delete message, log error
@@ -337,10 +467,14 @@ async def process_message(
         sqs_adapter: SQS adapter
         heartbeat: Heartbeat tracker
         twilio_client: Twilio WhatsApp client (None if delivery disabled)
+        deduplicator: Message deduplicator (None to disable)
 
     Returns:
         True if processed successfully, False otherwise
     """
+    # Start background heartbeat keeper to survive long processing
+    heartbeat_keeper = HeartbeatKeeper(heartbeat, interval=10)
+
     try:
         # Update heartbeat
         heartbeat.record_processing(message.message_id)
@@ -352,8 +486,22 @@ async def process_message(
 
         # Parse WhatsApp message
         whatsapp_msg = parse_whatsapp_message(message.body)
+        message_sid = whatsapp_msg.get("message_sid", "")
 
-        # Process message (generate prediction)
+        # Check for duplicate processing (skip if already processed)
+        if deduplicator and message_sid and deduplicator.is_processed(message_sid):
+            logger.info(
+                f"Skipping duplicate message {message_sid}",
+                extra={"message_id": message.message_id, "message_sid": message_sid}
+            )
+            sqs_adapter.delete_message(message.receipt_handle)
+            heartbeat.record_success()
+            return True
+
+        # Start heartbeat keeper BEFORE long processing
+        heartbeat_keeper.start(message.message_id)
+
+        # Process message (generate prediction) - this can take several minutes
         response = await process_whatsapp_message(whatsapp_msg, orchestrator)
 
         # Send WhatsApp response (raises exception on failure)
@@ -361,8 +509,15 @@ async def process_message(
             whatsapp_msg["phone"], response, twilio_client
         )
 
+        # Mark as processed AFTER successful Twilio send (for deduplication)
+        if deduplicator and message_sid:
+            deduplicator.mark_processed(message_sid)
+
         # Delete message from queue (success)
         sqs_adapter.delete_message(message.receipt_handle)
+
+        # Stop heartbeat keeper
+        heartbeat_keeper.stop()
 
         # Update heartbeat
         heartbeat.record_success()
@@ -375,6 +530,9 @@ async def process_message(
         return True
 
     except Exception as e:
+        # Stop heartbeat keeper on error
+        heartbeat_keeper.stop()
+
         # Classify error
         error_type = classify_error(e)
 
@@ -412,6 +570,7 @@ def daemon_loop(
     shutdown_event: threading.Event,
     heartbeat: Heartbeat,
     twilio_client: TwilioWhatsAppClient | None,
+    deduplicator: MessageDeduplicator | None = None,
     poll_interval: int = 1,
 ) -> None:
     """Main daemon polling loop.
@@ -424,6 +583,7 @@ def daemon_loop(
         shutdown_event: Event to signal shutdown
         heartbeat: Heartbeat tracker
         twilio_client: Twilio WhatsApp client (None if delivery disabled)
+        deduplicator: Message deduplicator (None to disable)
         poll_interval: Seconds to wait between polls (default: 1)
 
     Example:
@@ -461,7 +621,8 @@ def daemon_loop(
                 # Run async processing in shared event loop (reused across messages)
                 success = loop.run_until_complete(
                     process_message(
-                        message, orchestrator, sqs_adapter, heartbeat, twilio_client
+                        message, orchestrator, sqs_adapter, heartbeat, twilio_client,
+                        deduplicator
                     )
                 )
 
@@ -543,6 +704,26 @@ def start_daemon(
     heartbeat = Heartbeat(path=heartbeat_path)
     shutdown_event = threading.Event()
 
+    # Initialize Redis client for message deduplication
+    deduplicator = None
+    redis_endpoint = os.environ.get("REDIS_ENDPOINT")
+    if redis_endpoint:
+        try:
+            redis_ssl = os.environ.get("REDIS_SSL", "false").lower() == "true"
+            redis_client = RedisCache(
+                host=redis_endpoint,
+                port=int(os.environ.get("REDIS_PORT", "6379")),
+                password=os.environ.get("REDIS_PASSWORD"),
+                ssl=redis_ssl,
+            )
+            deduplicator = MessageDeduplicator(redis_client, ttl_seconds=3600)
+            logger.info(f"Message deduplication ENABLED (Redis: {redis_endpoint})")
+        except Exception as e:
+            logger.warning(f"Failed to initialize Redis for deduplication: {e}")
+            logger.warning("Message deduplication DISABLED - Continuing without deduplication")
+    else:
+        logger.warning("REDIS_ENDPOINT not set - Message deduplication DISABLED")
+
     # Initialize Twilio WhatsApp client (optional - only if delivery enabled)
     twilio_client = None
     if enable_whatsapp_delivery:
@@ -568,6 +749,7 @@ def start_daemon(
             shutdown_event=shutdown_event,
             heartbeat=heartbeat,
             twilio_client=twilio_client,
+            deduplicator=deduplicator,
         )
     except Exception as e:
         logger.error(f"Daemon failed: {e}", exc_info=True)
