@@ -254,6 +254,38 @@ class SQSAdapter:
             logger.error(f"Failed to return message to queue: {e}", exc_info=True)
             return False
 
+    def extend_visibility_timeout(self, receipt_handle: str, timeout_seconds: int = 300) -> bool:
+        """Extend visibility timeout for a message being processed.
+
+        Prevents message from becoming visible to other consumers while
+        processing is still ongoing. Should be called periodically during
+        long-running operations.
+
+        Args:
+            receipt_handle: Message receipt handle
+            timeout_seconds: New visibility timeout in seconds (default: 300 = 5 minutes)
+                            Maximum allowed by SQS is 43200 (12 hours)
+
+        Returns:
+            True if visibility timeout extended successfully, False otherwise
+
+        Example:
+            >>> # Extend visibility by 5 minutes during long processing
+            >>> adapter.extend_visibility_timeout(message.receipt_handle, 300)
+        """
+        try:
+            self.sqs_client.change_message_visibility(
+                QueueUrl=self.queue_url,
+                ReceiptHandle=receipt_handle,
+                VisibilityTimeout=timeout_seconds,
+            )
+            logger.debug(f"Visibility timeout extended to {timeout_seconds}s")
+            return True
+
+        except ClientError as e:
+            logger.error(f"Failed to extend visibility timeout: {e}", exc_info=True)
+            return False
+
     def get_approximate_message_count(self) -> int:
         """Get approximate number of messages in queue.
 

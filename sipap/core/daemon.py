@@ -170,6 +170,224 @@ class MessageDeduplicator:
             logger.warning(f"Failed to mark message as processed: {e}")
 
 
+class VisibilityTimeoutExtender:
+    """Periodically extend SQS visibility timeout during long processing.
+
+    When processing takes longer than the default visibility timeout (30s),
+    the message becomes visible to other consumers and may be processed again.
+    This class runs a background thread that extends the visibility timeout
+    periodically, preventing duplicate processing at the SQS level.
+
+    Works in conjunction with MessageDeduplicator for defense-in-depth:
+    - VisibilityTimeoutExtender: Prevents message from becoming visible (SQS level)
+    - MessageDeduplicator: Catches duplicates if visibility extension fails (Redis level)
+
+    Example:
+        >>> extender = VisibilityTimeoutExtender(sqs_adapter, interval=60, extension=120)
+        >>> extender.start(receipt_handle)
+        >>> # ... long processing ...
+        >>> extender.stop()
+    """
+
+    def __init__(
+        self,
+        sqs_adapter: SQSAdapter,
+        interval: int = 60,
+        extension: int = 120,
+    ):
+        """Initialize visibility timeout extender.
+
+        Args:
+            sqs_adapter: SQS adapter instance
+            interval: Seconds between extension calls (default: 60)
+            extension: Visibility timeout to set in seconds (default: 120)
+        """
+        self.sqs_adapter = sqs_adapter
+        self.interval = interval
+        self.extension = extension
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._receipt_handle: str | None = None
+
+    def start(self, receipt_handle: str) -> None:
+        """Start extending visibility timeout for a message.
+
+        Args:
+            receipt_handle: SQS message receipt handle
+        """
+        self._receipt_handle = receipt_handle
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        logger.debug(f"VisibilityTimeoutExtender started (interval={self.interval}s, extension={self.extension}s)")
+
+    def stop(self) -> None:
+        """Stop extending visibility timeout."""
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=2)
+        logger.debug("VisibilityTimeoutExtender stopped")
+
+    def _run(self) -> None:
+        """Background thread that extends visibility timeout periodically."""
+        while not self._stop_event.is_set():
+            # Wait for interval before first extension (message just received)
+            if self._stop_event.wait(self.interval):
+                break  # Stop requested
+
+            if self._receipt_handle:
+                try:
+                    success = self.sqs_adapter.extend_visibility_timeout(
+                        self._receipt_handle, self.extension
+                    )
+                    if not success:
+                        logger.warning("Failed to extend visibility timeout")
+                except Exception as e:
+                    logger.warning(f"VisibilityTimeoutExtender error: {e}")
+
+
+class CircuitBreaker:
+    """Circuit breaker to prevent cascading failures.
+
+    After N consecutive failures, the circuit "opens" and processing is paused
+    for a cooldown period. This prevents:
+    - Runaway retry loops that waste resources
+    - Overwhelming downstream services during outages
+    - Sending multiple error messages to users
+
+    States:
+    - CLOSED: Normal operation, processing allowed
+    - OPEN: Too many failures, processing blocked for cooldown period
+    - HALF_OPEN: Testing if system recovered, allow one request through
+
+    Example:
+        >>> breaker = CircuitBreaker(failure_threshold=5, reset_timeout=300)
+        >>> if breaker.can_process():
+        ...     try:
+        ...         process_message()
+        ...         breaker.record_success()
+        ...     except Exception:
+        ...         breaker.record_failure()
+        ... else:
+        ...     logger.info("Circuit open, skipping processing")
+    """
+
+    # Circuit states
+    CLOSED = "CLOSED"
+    OPEN = "OPEN"
+    HALF_OPEN = "HALF_OPEN"
+
+    def __init__(
+        self,
+        failure_threshold: int = 5,
+        reset_timeout: int = 300,
+        half_open_max_calls: int = 1,
+    ):
+        """Initialize circuit breaker.
+
+        Args:
+            failure_threshold: Consecutive failures before opening circuit (default: 5)
+            reset_timeout: Seconds to wait before trying again (default: 300 = 5 minutes)
+            half_open_max_calls: Calls allowed in half-open state (default: 1)
+        """
+        self.failure_threshold = failure_threshold
+        self.reset_timeout = reset_timeout
+        self.half_open_max_calls = half_open_max_calls
+
+        self._state = self.CLOSED
+        self._failure_count = 0
+        self._success_count = 0
+        self._last_failure_time: float | None = None
+        self._half_open_calls = 0
+        self._lock = threading.Lock()
+
+    @property
+    def state(self) -> str:
+        """Get current circuit state (may transition from OPEN to HALF_OPEN)."""
+        with self._lock:
+            if self._state == self.OPEN:
+                # Check if reset timeout has passed
+                if self._last_failure_time:
+                    elapsed = time.time() - self._last_failure_time
+                    if elapsed >= self.reset_timeout:
+                        logger.info(
+                            f"Circuit breaker transitioning OPEN → HALF_OPEN "
+                            f"(reset timeout {self.reset_timeout}s elapsed)"
+                        )
+                        self._state = self.HALF_OPEN
+                        self._half_open_calls = 0
+            return self._state
+
+    def can_process(self) -> bool:
+        """Check if processing is allowed.
+
+        Returns:
+            True if processing allowed, False if circuit is open
+        """
+        state = self.state  # May trigger OPEN → HALF_OPEN transition
+
+        if state == self.CLOSED:
+            return True
+        elif state == self.HALF_OPEN:
+            with self._lock:
+                if self._half_open_calls < self.half_open_max_calls:
+                    self._half_open_calls += 1
+                    return True
+                return False
+        else:  # OPEN
+            return False
+
+    def record_success(self) -> None:
+        """Record successful processing."""
+        with self._lock:
+            if self._state == self.HALF_OPEN:
+                # Success in half-open state, close circuit
+                logger.info("Circuit breaker transitioning HALF_OPEN → CLOSED (success)")
+                self._state = self.CLOSED
+                self._failure_count = 0
+                self._success_count = 1
+            elif self._state == self.CLOSED:
+                self._success_count += 1
+                # Reset failure count on success
+                if self._failure_count > 0:
+                    logger.debug(f"Circuit breaker: failure count reset (was {self._failure_count})")
+                    self._failure_count = 0
+
+    def record_failure(self) -> None:
+        """Record failed processing."""
+        with self._lock:
+            self._failure_count += 1
+            self._last_failure_time = time.time()
+
+            if self._state == self.HALF_OPEN:
+                # Failure in half-open state, reopen circuit
+                logger.warning("Circuit breaker transitioning HALF_OPEN → OPEN (failure)")
+                self._state = self.OPEN
+            elif self._state == self.CLOSED:
+                if self._failure_count >= self.failure_threshold:
+                    logger.warning(
+                        f"Circuit breaker transitioning CLOSED → OPEN "
+                        f"({self._failure_count} consecutive failures)"
+                    )
+                    self._state = self.OPEN
+
+    def get_stats(self) -> dict[str, Any]:
+        """Get circuit breaker statistics."""
+        with self._lock:
+            return {
+                "state": self._state,
+                "failure_count": self._failure_count,
+                "success_count": self._success_count,
+                "failure_threshold": self.failure_threshold,
+                "reset_timeout": self.reset_timeout,
+                "last_failure_time": self._last_failure_time,
+            }
+
+
+# Default request timeout for processing (5 minutes)
+DEFAULT_REQUEST_TIMEOUT = 300
+
+
 def setup_signal_handlers(shutdown_event: threading.Event) -> None:
     """Register signal handlers for graceful shutdown.
 
@@ -443,21 +661,24 @@ async def process_message(
     heartbeat: Heartbeat,
     twilio_client: TwilioWhatsAppClient | None,
     deduplicator: MessageDeduplicator | None = None,
+    request_timeout: int = DEFAULT_REQUEST_TIMEOUT,
 ) -> bool:
-    """Process a single SQS message.
+    """Process a single SQS message with timeout and visibility management.
 
     Steps:
     1. Check for duplicate (skip if already processed)
     2. Start background heartbeat keeper
-    3. Parse WhatsApp message
-    4. Generate prediction
-    5. Send WhatsApp response (or log in dry-run mode)
-    6. Mark as processed (for deduplication)
-    7. Delete message from queue (success)
-    8. Stop heartbeat keeper
-    9. Update heartbeat (success)
+    3. Start visibility timeout extender
+    4. Parse WhatsApp message
+    5. Generate prediction (with timeout)
+    6. Send WhatsApp response (or log in dry-run mode)
+    7. Mark as processed (for deduplication)
+    8. Delete message from queue (success)
+    9. Stop background threads
+    10. Update heartbeat (success)
 
     On error:
+    - Timeout: Return to queue for retry, log error
     - Permanent: Delete message, log error
     - Transient: Return to queue, will retry
 
@@ -468,12 +689,17 @@ async def process_message(
         heartbeat: Heartbeat tracker
         twilio_client: Twilio WhatsApp client (None if delivery disabled)
         deduplicator: Message deduplicator (None to disable)
+        request_timeout: Maximum seconds for processing (default: 300 = 5 minutes)
 
     Returns:
         True if processed successfully, False otherwise
     """
     # Start background heartbeat keeper to survive long processing
     heartbeat_keeper = HeartbeatKeeper(heartbeat, interval=10)
+
+    # Start visibility timeout extender to prevent SQS from making message visible
+    # Extend by 120s every 60s (always ahead of SQS default 30s visibility)
+    visibility_extender = VisibilityTimeoutExtender(sqs_adapter, interval=60, extension=120)
 
     try:
         # Update heartbeat
@@ -498,16 +724,34 @@ async def process_message(
             heartbeat.record_success()
             return True
 
-        # Start heartbeat keeper BEFORE long processing
+        # Start background threads BEFORE long processing
         heartbeat_keeper.start(message.message_id)
+        visibility_extender.start(message.receipt_handle)
 
-        # Process message (generate prediction) - this can take several minutes
-        response = await process_whatsapp_message(whatsapp_msg, orchestrator)
+        # Process message with timeout (prevents hung requests)
+        try:
+            async with asyncio.timeout(request_timeout):
+                # Process message (generate prediction) - this can take several minutes
+                response = await process_whatsapp_message(whatsapp_msg, orchestrator)
 
-        # Send WhatsApp response (raises exception on failure)
-        await send_whatsapp_response(
-            whatsapp_msg["phone"], response, twilio_client
-        )
+                # Send WhatsApp response (raises exception on failure)
+                await send_whatsapp_response(
+                    whatsapp_msg["phone"], response, twilio_client
+                )
+
+        except asyncio.TimeoutError:
+            # Request timed out - log and return to queue for retry
+            logger.error(
+                f"Request timed out after {request_timeout}s for message {message.message_id}",
+                extra={"message_id": message.message_id, "timeout": request_timeout}
+            )
+            # Stop background threads
+            heartbeat_keeper.stop()
+            visibility_extender.stop()
+            # Return to queue with delay (not immediate retry)
+            sqs_adapter.extend_visibility_timeout(message.receipt_handle, 60)
+            heartbeat.record_failure(f"Timeout after {request_timeout}s")
+            return False
 
         # Mark as processed AFTER successful Twilio send (for deduplication)
         if deduplicator and message_sid:
@@ -516,8 +760,9 @@ async def process_message(
         # Delete message from queue (success)
         sqs_adapter.delete_message(message.receipt_handle)
 
-        # Stop heartbeat keeper
+        # Stop background threads
         heartbeat_keeper.stop()
+        visibility_extender.stop()
 
         # Update heartbeat
         heartbeat.record_success()
@@ -530,8 +775,9 @@ async def process_message(
         return True
 
     except Exception as e:
-        # Stop heartbeat keeper on error
+        # Stop background threads on error
         heartbeat_keeper.stop()
+        visibility_extender.stop()
 
         # Classify error
         error_type = classify_error(e)
@@ -571,11 +817,14 @@ def daemon_loop(
     heartbeat: Heartbeat,
     twilio_client: TwilioWhatsAppClient | None,
     deduplicator: MessageDeduplicator | None = None,
+    circuit_breaker: CircuitBreaker | None = None,
+    request_timeout: int = DEFAULT_REQUEST_TIMEOUT,
     poll_interval: int = 1,
 ) -> None:
-    """Main daemon polling loop.
+    """Main daemon polling loop with circuit breaker protection.
 
     Continuously polls SQS queue and processes messages until shutdown.
+    Uses circuit breaker to prevent cascading failures.
 
     Args:
         sqs_adapter: SQS adapter
@@ -584,6 +833,8 @@ def daemon_loop(
         heartbeat: Heartbeat tracker
         twilio_client: Twilio WhatsApp client (None if delivery disabled)
         deduplicator: Message deduplicator (None to disable)
+        circuit_breaker: Circuit breaker for failure protection (None to disable)
+        request_timeout: Maximum seconds for processing (default: 300)
         poll_interval: Seconds to wait between polls (default: 1)
 
     Example:
@@ -596,6 +847,11 @@ def daemon_loop(
         ... )
     """
     logger.info("Starting daemon polling loop")
+    logger.info(f"Request timeout: {request_timeout}s")
+    if circuit_breaker:
+        logger.info(f"Circuit breaker enabled: threshold={circuit_breaker.failure_threshold}, reset={circuit_breaker.reset_timeout}s")
+    else:
+        logger.info("Circuit breaker: DISABLED")
 
     # Create event loop once and reuse for all messages
     # This prevents "Event loop is closed" errors with cached httpx clients in MCP factory
@@ -607,6 +863,18 @@ def daemon_loop(
             try:
                 # Update heartbeat
                 heartbeat.record_poll()
+
+                # Check circuit breaker before polling
+                if circuit_breaker and not circuit_breaker.can_process():
+                    stats = circuit_breaker.get_stats()
+                    logger.warning(
+                        f"Circuit breaker OPEN - pausing processing "
+                        f"(failures={stats['failure_count']}, "
+                        f"will retry after {circuit_breaker.reset_timeout}s)"
+                    )
+                    # Sleep during circuit open state but keep heartbeat alive
+                    time.sleep(min(30, circuit_breaker.reset_timeout))
+                    continue
 
                 # Poll SQS (20-second long polling)
                 messages = sqs_adapter.receive_messages(max_messages=1, wait_time=20)
@@ -622,13 +890,16 @@ def daemon_loop(
                 success = loop.run_until_complete(
                     process_message(
                         message, orchestrator, sqs_adapter, heartbeat, twilio_client,
-                        deduplicator
+                        deduplicator, request_timeout
                     )
                 )
 
-                if not success:
-                    # Processing failed (logged in process_message)
-                    pass
+                # Update circuit breaker based on result
+                if circuit_breaker:
+                    if success:
+                        circuit_breaker.record_success()
+                    else:
+                        circuit_breaker.record_failure()
 
                 # Brief pause between polls
                 time.sleep(poll_interval)
@@ -646,6 +917,11 @@ def daemon_loop(
                     exc_info=True
                 )
                 heartbeat.record_failure(f"Daemon loop error: {type(e).__name__}")
+
+                # Record failure in circuit breaker
+                if circuit_breaker:
+                    circuit_breaker.record_failure()
+
                 time.sleep(5)  # Backoff on error
 
     finally:
@@ -653,6 +929,11 @@ def daemon_loop(
         logger.info("Closing event loop...")
         loop.close()
         logger.info("Event loop closed")
+
+        # Log final circuit breaker stats
+        if circuit_breaker:
+            stats = circuit_breaker.get_stats()
+            logger.info(f"Circuit breaker final stats: {stats}")
 
     # Graceful shutdown
     heartbeat.record_shutdown()
@@ -738,6 +1019,21 @@ def start_daemon(
     else:
         logger.warning("⚠️  WhatsApp delivery DISABLED - Running in dry-run mode (messages will be logged only)")
 
+    # Initialize circuit breaker for failure protection
+    # Default: 5 consecutive failures → 5 minute cooldown
+    circuit_breaker = CircuitBreaker(
+        failure_threshold=int(os.environ.get("CIRCUIT_BREAKER_THRESHOLD", "5")),
+        reset_timeout=int(os.environ.get("CIRCUIT_BREAKER_RESET_TIMEOUT", "300")),
+    )
+    logger.info(
+        f"Circuit breaker ENABLED (threshold={circuit_breaker.failure_threshold}, "
+        f"reset={circuit_breaker.reset_timeout}s)"
+    )
+
+    # Get request timeout from environment (default: 5 minutes)
+    request_timeout = int(os.environ.get("REQUEST_TIMEOUT", str(DEFAULT_REQUEST_TIMEOUT)))
+    logger.info(f"Request timeout: {request_timeout}s")
+
     # Register signal handlers
     setup_signal_handlers(shutdown_event)
 
@@ -750,6 +1046,8 @@ def start_daemon(
             heartbeat=heartbeat,
             twilio_client=twilio_client,
             deduplicator=deduplicator,
+            circuit_breaker=circuit_breaker,
+            request_timeout=request_timeout,
         )
     except Exception as e:
         logger.error(f"Daemon failed: {e}", exc_info=True)
