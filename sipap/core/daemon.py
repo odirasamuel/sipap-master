@@ -384,8 +384,11 @@ class CircuitBreaker:
             }
 
 
-# Default request timeout for processing (5 minutes)
-DEFAULT_REQUEST_TIMEOUT = 300
+# Default request timeout for processing (30 minutes)
+# Batch predictions with many fixtures and sequential tool execution
+# can take significant time. 30 minutes provides safe headroom.
+# Configurable via REQUEST_TIMEOUT environment variable.
+DEFAULT_REQUEST_TIMEOUT = 1800
 
 
 def setup_signal_handlers(shutdown_event: threading.Event) -> None:
