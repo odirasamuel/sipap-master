@@ -289,9 +289,10 @@ class SoccerOrchestrator:
             match_data = match_details_result["match"]
             home_team_id = match_data.get("home_team_id")
             away_team_id = match_data.get("away_team_id")
-            external_id = match_data.get("external_id")  # API-Football fixture ID (integer)
+            external_id = match_data.get("external_id") or match_data.get("id")  # API-Football fixture ID (integer)
             # Use league_external_id (API-Football integer ID), NOT league_id (internal UUID)
-            league_external_id = match_data.get("league_external_id")  # API-Football league ID (integer)
+            # Support both database format (*_external_id) and API format (*_id)
+            league_external_id = match_data.get("league_external_id") or match_data.get("league_id")  # API-Football league ID (integer)
 
             # Handle both string and dict formats for team names
             home_team = match_data.get("home_team")
@@ -310,8 +311,9 @@ class SoccerOrchestrator:
                 return None
 
             # Get external team IDs for MCP calls that need integers
-            home_team_external_id = match_data.get("home_team_external_id")
-            away_team_external_id = match_data.get("away_team_external_id")
+            # Support both database format (*_external_id) and API format (*_id)
+            home_team_external_id = match_data.get("home_team_external_id") or match_data.get("home_team_id")
+            away_team_external_id = match_data.get("away_team_external_id") or match_data.get("away_team_id")
 
             # Step 2: Fetch all other data in parallel (skip tools that fail or aren't available)
             # Note: All items must be coroutines, not None, for asyncio.gather
@@ -441,9 +443,10 @@ class SoccerOrchestrator:
         match_data = match_details_result["match"]
 
         # Extract API-Football IDs (integers) for Data MCP tools
-        home_team_external_id = match_data.get("home_team_external_id")
-        away_team_external_id = match_data.get("away_team_external_id")
-        league_external_id = match_data.get("league_external_id")
+        # Support both database format (*_external_id) and API format (*_id)
+        home_team_external_id = match_data.get("home_team_external_id") or match_data.get("home_team_id")
+        away_team_external_id = match_data.get("away_team_external_id") or match_data.get("away_team_id")
+        league_external_id = match_data.get("league_external_id") or match_data.get("league_id")
 
         if not all([home_team_external_id, away_team_external_id, league_external_id]):
             raise ValueError(
@@ -1465,11 +1468,13 @@ Focus on your specialized analysis approach based on your role.
                 break
 
             # Extract fixture details
+            # Support both database format (external_id) and API format (id)
             fixture_id = fixture.get("id") or fixture.get("external_id")
-            external_id = fixture.get("external_id")
-            home_team_external_id = fixture.get("home_team_external_id")
-            away_team_external_id = fixture.get("away_team_external_id")
-            league_external_id = fixture.get("league_external_id")
+            external_id = fixture.get("external_id") or fixture.get("id")
+            # Support both database format (*_external_id) and API format (*_id)
+            home_team_external_id = fixture.get("home_team_external_id") or fixture.get("home_team_id")
+            away_team_external_id = fixture.get("away_team_external_id") or fixture.get("away_team_id")
+            league_external_id = fixture.get("league_external_id") or fixture.get("league_id")
 
             # Skip if missing required IDs
             if not all([external_id, home_team_external_id, away_team_external_id, league_external_id]):
@@ -1770,11 +1775,13 @@ Focus on your specialized analysis approach based on your role.
 
         for fixture in fixtures:
             # Extract fixture details
+            # Support both database format (external_id) and API format (id)
             fixture_id = fixture.get("id") or fixture.get("external_id")
-            external_id = fixture.get("external_id")
-            home_team_external_id = fixture.get("home_team_external_id")
-            away_team_external_id = fixture.get("away_team_external_id")
-            league_external_id = fixture.get("league_external_id")
+            external_id = fixture.get("external_id") or fixture.get("id")
+            # Support both database format (*_external_id) and API format (*_id)
+            home_team_external_id = fixture.get("home_team_external_id") or fixture.get("home_team_id")
+            away_team_external_id = fixture.get("away_team_external_id") or fixture.get("away_team_id")
+            league_external_id = fixture.get("league_external_id") or fixture.get("league_id")
 
             # Skip if missing required IDs
             if not all([external_id, home_team_external_id, away_team_external_id, league_external_id]):
