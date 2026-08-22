@@ -14,12 +14,18 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
 from sipap.sports.soccer.markets import REGISTRY, get_market
 
 logger = logging.getLogger(__name__)
+
+# DC 12 outcome penalty factor: Reduces 12 (Home/Away) probability to prioritize
+# 1X (Home/Draw) and X2 (Draw/Away) which include draws and are safer bets.
+# Values: 1.0 = no penalty, 0.85 = 15% penalty (recommended), 0.0 = never select 12
+DC_12_PENALTY_FACTOR = float(os.environ.get("DC_12_PENALTY_FACTOR", "0.85"))
 
 
 @dataclass
@@ -865,9 +871,13 @@ class MarketEvaluator:
             # 12 = P(Home) + P(Away) = 1 - P(Draw)
             p_12 = 1 - wp.get("draw", 0)
 
+            # Apply penalty to 12 outcome - it excludes draws which makes it riskier
+            # 1X and X2 include draws, making them safer bets
+            p_12_adjusted = p_12 * DC_12_PENALTY_FACTOR
+
             outcomes = [
                 MarketOutcome("1X", p_1x, dc_home.data.get("weighted_probability", p_1x), quality),
-                MarketOutcome("12", p_12, p_12, quality),
+                MarketOutcome("12", p_12, p_12_adjusted, quality),  # Use adjusted prob for selection
                 MarketOutcome("X2", p_x2, dc_away.data.get("weighted_probability", p_x2), quality),
             ]
             evaluations.append(
