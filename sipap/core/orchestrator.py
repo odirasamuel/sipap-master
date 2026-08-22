@@ -877,10 +877,18 @@ class MainOrchestrator:
                         selections_text.append(market_line)
                 else:
                     # LEGACY FORMAT: Single best market (backward compatibility)
-                    outcome = selection.get("best_outcome", "?")
-                    odd = selection.get("bookmaker_odd", 0)
-                    conf = selection.get("confidence", 0)
+                    # Support both old format (best_outcome, bookmaker_odd) and
+                    # new market-filtered format (outcome, odds, probability)
+                    outcome = selection.get("best_outcome") or selection.get("outcome", "?")
+                    odd = selection.get("bookmaker_odd") or selection.get("odds", 0)
+                    # For confidence, use confidence field or probability field
+                    conf = selection.get("confidence") or selection.get("probability", 0)
                     ev = selection.get("ev", 0)
+
+                    # Include market name in output for market-filtered requests
+                    market_name = selection.get("market_name") or selection.get("market_code", "")
+                    if market_name and outcome != "?":
+                        outcome = f"{market_name}: {outcome}"
 
                     # Ensure numeric types for formatting (may be strings from LLM)
                     try:
