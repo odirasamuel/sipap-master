@@ -1745,25 +1745,21 @@ Focus on your specialized analysis approach based on your role.
         # Step 1: Get fixtures for the date
         data_mcp = self.mcp_factory.create("data")
 
-        # Get API client for odds fetching
-        api_client = None
+        # Get API client for odds fetching (use our simple client, not sipap_data_mcp)
+        odds_client = None
         try:
-            from sipap_data_mcp.api.football_client import APIFootballClient
-            from sipap_data_mcp.cache.redis import RedisCache
+            from sipap.integrations.api_football import APIFootballOddsClient
             import os
 
             api_key = os.environ.get("API_FOOTBALL_KEY", "")
-            redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-
             if api_key:
-                cache = RedisCache(url=redis_url)
-                await cache.connect()
-                api_client = APIFootballClient(api_key=api_key, cache=cache)
-                await api_client.connect()
-        except ImportError:
-            self.logger.warning("sipap_data_mcp not available, odds fetching disabled")
+                odds_client = APIFootballOddsClient(api_key=api_key)
+                await odds_client.connect()
+                self.logger.info("API-Football odds client initialized")
+            else:
+                self.logger.warning("API_FOOTBALL_KEY not set, odds fetching disabled")
         except Exception as e:
-            self.logger.warning(f"Failed to initialize API client: {e}")
+            self.logger.warning(f"Failed to initialize odds client: {e}")
 
         # Fetch fixtures from database/MCP
         try:
@@ -1838,28 +1834,37 @@ Focus on your specialized analysis approach based on your role.
 
             try:
                 # Evaluate only the filtered markets for this fixture
-                if api_client:
-                    evaluations = await self._market_evaluator.evaluate_all_markets_with_odds(
-                        home_team_id=int(home_team_external_id),
-                        away_team_id=int(away_team_external_id),
-                        league_id=int(league_external_id),
-                        fixture_id=int(external_id),
-                        api_client=api_client,
-                        top_n=len(market_codes),  # Get all filtered markets
-                        min_probability=0.0,  # Don't filter here, filter after
-                        market_codes=market_codes,
-                    )
-                else:
-                    evaluations = await self._market_evaluator.evaluate_all_markets(
-                        home_team_id=int(home_team_external_id),
-                        away_team_id=int(away_team_external_id),
-                        league_id=int(league_external_id),
-                        market_codes=market_codes,
-                    )
+                evaluations = await self._market_evaluator.evaluate_all_markets(
+                    home_team_id=int(home_team_external_id),
+                    away_team_id=int(away_team_external_id),
+                    league_id=int(league_external_id),
+                    market_codes=market_codes,
+                )
 
                 # Add all evaluations meeting the probability threshold
                 for evaluation in evaluations:
                     if evaluation.best_outcome.weighted_probability >= min_probability:
+                        # Fetch odds using our client if available
+                        odds_value = evaluation.best_odds or 0.0
+                        bookmaker_name = evaluation.best_odds_bookmaker or ""
+
+                        if odds_client and int(external_id):
+                            try:
+                                odds_result = await odds_client.get_odds_for_market(
+                                    fixture_id=int(external_id),
+                                    market_code=evaluation.market_code,
+                                    outcome_code=evaluation.best_outcome.outcome_code,
+                                )
+                                if odds_result["best_odds"] > 0:
+                                    odds_value = odds_result["best_odds"]
+                                    bookmaker_name = odds_result["bookmaker"]
+                                    self.logger.debug(
+                                        f"Odds for {evaluation.market_code}/{evaluation.best_outcome.outcome_code}: "
+                                        f"{odds_value} @ {bookmaker_name}"
+                                    )
+                            except Exception as e:
+                                self.logger.debug(f"Failed to fetch odds: {e}")
+
                         all_selections.append({
                             "fixture_id": str(fixture_id),
                             "external_id": int(external_id),
@@ -1876,8 +1881,8 @@ Focus on your specialized analysis approach based on your role.
                             "outcome": evaluation.best_outcome.outcome_code,
                             "probability": evaluation.best_outcome.weighted_probability,
                             "confidence": evaluation.best_outcome.confidence,
-                            "odds": evaluation.best_odds,
-                            "bookmaker": evaluation.best_odds_bookmaker,
+                            "odds": odds_value,
+                            "bookmaker": bookmaker_name,
                         })
 
                 # Log progress after successful evaluation
@@ -1894,10 +1899,10 @@ Focus on your specialized analysis approach based on your role.
             if fixture_idx < total_fixtures - 1:
                 await asyncio.sleep(FIXTURE_DELAY)
 
-        # Cleanup API client
-        if api_client:
+        # Cleanup odds client
+        if odds_client:
             try:
-                await api_client.close()
+                await odds_client.close()
             except Exception:
                 pass
 
