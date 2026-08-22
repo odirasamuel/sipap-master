@@ -722,16 +722,35 @@ Focus on your specialized analysis approach based on your role.
                 # Extract structured output
                 if hasattr(result, "structured_output") and result.structured_output:
                     structured = result.structured_output
+
+                    # Handle case where prediction is a string instead of dict
+                    # This happens when the LLM returns malformed structured output
+                    pred = structured.prediction
+                    if isinstance(pred, str):
+                        # Try to parse as JSON
+                        try:
+                            import json
+                            pred = json.loads(pred)
+                        except (json.JSONDecodeError, TypeError):
+                            self.logger.warning(
+                                f"Agent {agent_name} returned prediction as string, using fallback"
+                            )
+                            pred = {}
+
+                    # Ensure pred is a dict (fallback to empty dict)
+                    if not isinstance(pred, dict):
+                        pred = {}
+
                     prediction_data = {
                         "agent": agent_name,
                         "prediction": {
-                            "market": structured.prediction.get("market", market),
-                            "outcome": structured.prediction.get("outcome", "Unknown"),
-                            "probability": structured.prediction.get("probability", 0.5),
-                            "confidence": structured.prediction.get("confidence", 50),
+                            "market": pred.get("market", market),
+                            "outcome": pred.get("outcome", "Unknown"),
+                            "probability": pred.get("probability", 0.5),
+                            "confidence": pred.get("confidence", 50),
                         },
-                        "reasoning": structured.reasoning,
-                        "evidence": structured.evidence,
+                        "reasoning": structured.reasoning if hasattr(structured, "reasoning") else "",
+                        "evidence": structured.evidence if hasattr(structured, "evidence") else [],
                         "metadata": structured.metadata if hasattr(structured, "metadata") else {},
                     }
                     # Only log individual agent predictions if DEBUG enabled
