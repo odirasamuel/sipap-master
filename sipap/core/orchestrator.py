@@ -252,6 +252,17 @@ class MainOrchestrator:
             confidence = final_prediction.get("confidence", 0)
             recommendation = final_prediction.get("recommendation", "")
 
+            # Ensure numeric types for formatting
+            try:
+                probability = float(probability) if probability else 0.0
+                confidence = float(confidence) if confidence else 0.0
+                if probability > 1:
+                    probability = probability / 100
+                if confidence > 1:
+                    confidence = confidence / 100
+            except (ValueError, TypeError):
+                probability, confidence = 0.0, 0.0
+
             assistant_message = (
                 f"Prediction for {home_team} vs {away_team}:\n"
                 f"Outcome: {outcome}\n"
@@ -735,6 +746,11 @@ class MainOrchestrator:
             }
         """
         target = intent.target_odds or 20.0  # Default to 20 odds
+        # Ensure target is a float for formatting
+        try:
+            target = float(target)
+        except (ValueError, TypeError):
+            target = 20.0
 
         try:
             # Call BatchOrchestrator to process request
@@ -757,7 +773,12 @@ class MainOrchestrator:
                 }
 
             # Format success response
-            accumulated_odds = result["accumulated_odds"]
+            accumulated_odds = result.get("accumulated_odds", 0)
+            # Ensure accumulated_odds is a float for formatting
+            try:
+                accumulated_odds = float(accumulated_odds)
+            except (ValueError, TypeError):
+                accumulated_odds = 0.0
             num_selections = len(result["selections"])
             warning = result.get("warning")
 
@@ -838,6 +859,19 @@ class MainOrchestrator:
                         ev = market.get("ev", 0)
                         market_name = market.get("market_name", market.get("market_code", ""))
 
+                        # Ensure numeric types for formatting (may be strings from LLM)
+                        try:
+                            odd = float(odd) if odd else 0.0
+                            conf = float(conf) if conf else 0.0
+                            ev = float(ev) if ev else 0.0
+                            # Normalize if conf/ev are percentages (>1 means already %)
+                            if conf > 1:
+                                conf = conf / 100
+                            if abs(ev) > 1:
+                                ev = ev / 100
+                        except (ValueError, TypeError):
+                            odd, conf, ev = 0.0, 0.0, 0.0
+
                         # Format: "   ⭐ BTTS Yes @1.85 (72%, +8%)"
                         market_line = f"   {icon} {outcome} @{odd:.2f} ({conf:.0%}, {ev:+.0%})"
                         selections_text.append(market_line)
@@ -847,6 +881,19 @@ class MainOrchestrator:
                     odd = selection.get("bookmaker_odd", 0)
                     conf = selection.get("confidence", 0)
                     ev = selection.get("ev", 0)
+
+                    # Ensure numeric types for formatting (may be strings from LLM)
+                    try:
+                        odd = float(odd) if odd else 0.0
+                        conf = float(conf) if conf else 0.0
+                        ev = float(ev) if ev else 0.0
+                        # Normalize if conf/ev are percentages (>1 means already %)
+                        if conf > 1:
+                            conf = conf / 100
+                        if abs(ev) > 1:
+                            ev = ev / 100
+                    except (ValueError, TypeError):
+                        odd, conf, ev = 0.0, 0.0, 0.0
 
                     market_line = f"   ⭐ {outcome} @{odd:.2f} ({conf:.0%}, {ev:+.0%})"
                     selections_text.append(market_line)
@@ -968,6 +1015,17 @@ class MainOrchestrator:
                 probability = prediction.get("probability", 0)
                 confidence = prediction.get("confidence", 0)
                 recommendation = prediction.get("recommendation", "")
+
+                # Ensure numeric types for formatting
+                try:
+                    probability = float(probability) if probability else 0.0
+                    confidence = float(confidence) if confidence else 0.0
+                    if probability > 1:
+                        probability = probability / 100
+                    if confidence > 1:
+                        confidence = confidence / 100
+                except (ValueError, TypeError):
+                    probability, confidence = 0.0, 0.0
 
                 message = (
                     f"⚽ {match_id}\n"
