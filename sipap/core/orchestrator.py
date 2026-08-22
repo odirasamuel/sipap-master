@@ -768,7 +768,9 @@ class MainOrchestrator:
             # Leagues
             leagues = filters_applied.get("leagues") or intent.leagues
             if leagues:
-                filters_text.append(f"📍 Leagues: {', '.join(leagues)}")
+                # Convert LeagueEntity objects to strings (league names)
+                league_names = [l.name if hasattr(l, 'name') else str(l) for l in leagues]
+                filters_text.append(f"📍 Leagues: {', '.join(league_names)}")
 
             # Date range
             date_range = filters_applied.get("date_range") or intent.date_range
