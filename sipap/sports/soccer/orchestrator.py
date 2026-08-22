@@ -1087,6 +1087,88 @@ Focus on your specialized analysis approach based on your role.
                 "message": f"Unexpected error: {str(e)}",
             }
 
+    def _extract_best_odds(self, odds_data: dict[str, Any]) -> dict[str, float]:
+        """
+        Extract best odds from MCP odds response structure.
+
+        MCP returns odds in format:
+        {
+            "fixture_id": 1570351,
+            "count": 14,
+            "odds": [
+                {"market": "1X2", "home_odds": 2.24, "draw_odds": 2.98, "away_odds": 3.45, ...},
+                ...
+            ]
+        }
+
+        This method extracts the best (highest) odds for each outcome type.
+
+        Returns:
+            Dict mapping outcome names to best odds values:
+            {
+                "home": 2.28,
+                "draw": 3.07,
+                "away": 3.71,
+            }
+        """
+        best_odds: dict[str, float] = {}
+
+        # Handle nested odds structure from MCP
+        odds_list = odds_data.get("odds", [])
+        if not odds_list:
+            return best_odds
+
+        # Extract best odds from all bookmakers
+        for bookmaker in odds_list:
+            # 1X2 market odds
+            home = bookmaker.get("home_odds", 0)
+            draw = bookmaker.get("draw_odds", 0)
+            away = bookmaker.get("away_odds", 0)
+
+            if home > best_odds.get("home", 0):
+                best_odds["home"] = home
+            if draw > best_odds.get("draw", 0):
+                best_odds["draw"] = draw
+            if away > best_odds.get("away", 0):
+                best_odds["away"] = away
+
+        return best_odds
+
+    def _map_outcome_to_odds_key(self, outcome: str) -> str | None:
+        """
+        Map prediction outcome to odds key.
+
+        Args:
+            outcome: Prediction outcome (e.g., "Home Win", "Manchester City", "Yes")
+
+        Returns:
+            Odds key ("home", "draw", "away") or None if not mappable
+        """
+        outcome_lower = outcome.lower().strip()
+
+        # Home win patterns
+        if any(pattern in outcome_lower for pattern in [
+            "home win", "home", "1", "(1x)", "1x"
+        ]):
+            return "home"
+
+        # Draw patterns
+        if any(pattern in outcome_lower for pattern in [
+            "draw", "x", "tie"
+        ]):
+            return "draw"
+
+        # Away win patterns
+        if any(pattern in outcome_lower for pattern in [
+            "away win", "away", "2", "(x2)", "x2"
+        ]):
+            return "away"
+
+        # If outcome contains team name, it's likely home team prediction
+        # (ensemble often returns team name as outcome)
+        # Default to home for team-specific predictions
+        return "home"
+
     def calculate_expected_value(
         self,
         prediction: dict[str, Any],
@@ -1101,14 +1183,14 @@ Focus on your specialized analysis approach based on your role.
 
         Args:
             prediction: Ensemble prediction with probability
-            odds: Market odds for the outcome
+            odds: Market odds from MCP (nested structure with fixture_id, count, odds list)
 
         Returns:
             Expected value analysis with recommendation
 
         Example:
             >>> prediction = {"outcome": "Home Win", "probability": 0.60}
-            >>> odds = {"Home Win": 2.0}  # Decimal odds
+            >>> odds = {"fixture_id": 123, "count": 5, "odds": [...]}
             >>> result = calculate_expected_value(prediction, odds)
             >>> print(result)
             {
@@ -1134,18 +1216,25 @@ Focus on your specialized analysis approach based on your role.
 
         outcome: str = outcome_raw
 
+        # Extract best odds from nested MCP structure
+        best_odds = self._extract_best_odds(odds)
+
+        # Map outcome to odds key
+        odds_key = self._map_outcome_to_odds_key(outcome)
+
         # Get odds for this outcome
-        outcome_odds = odds.get(outcome)
+        outcome_odds = best_odds.get(odds_key) if odds_key else None
         if not outcome_odds:
             self.logger.warning(
-                f"No odds found for outcome '{outcome}'. Available odds keys: {list(odds.keys())}"
+                f"No odds found for outcome '{outcome}' (key: {odds_key}). "
+                f"Best odds extracted: {best_odds}"
             )
             return {
                 "expected_value": 0.0,
                 "odds": 0.0,
                 "is_positive_ev": False,
                 "recommendation": "SKIP - No odds available",
-                "reason": f"No odds found for outcome: {outcome}. Available: {list(odds.keys())}",
+                "reason": f"No odds found for outcome: {outcome} (key: {odds_key}). Best odds: {best_odds}",
             }
 
         # Convert decimal odds to implied probability
