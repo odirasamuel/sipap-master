@@ -3,6 +3,9 @@ Simple API-Football client for odds fetching.
 
 This client provides direct access to API-Football's odds endpoint
 without depending on sipap_data_mcp.
+
+Uses bet mappings from sipap.sports.soccer.bet_mappings for market-to-bet-id
+and outcome-to-API-value translations.
 """
 
 from __future__ import annotations
@@ -19,56 +22,38 @@ logger = logging.getLogger(__name__)
 # Based on bet coverage: Bet365 (102), Betano (88), 1xBet (83)
 PREFERRED_BOOKMAKERS = [8, 32, 11, 2, 7, 4]  # Bet365, Betano, 1xBet, Marathonbet, William Hill, Pinnacle
 
-# Market name mappings to API-Football bet IDs
-MARKET_BET_IDS = {
-    "1X2": 1,       # Match Winner
-    "DC": 12,       # Double Chance
-    "BTTS": 8,      # Both Teams Score
-    "OU2.5": 5,     # Goals Over/Under 2.5
-    "OU1.5": 5,     # Goals Over/Under 1.5
-    "OU3.5": 5,     # Goals Over/Under 3.5
-    "DNB": 7,       # Draw No Bet
-    "HT_FT": 14,    # Half Time / Full Time
-    "CS": 10,       # Correct Score
-}
 
-# Outcome mappings from our codes to API values
-OUTCOME_MAPPINGS = {
-    "1X2": {
-        "Home": "Home",
-        "Draw": "Draw",
-        "Away": "Away",
-        "1": "Home",
-        "X": "Draw",
-        "2": "Away",
-        # Handle variations from market evaluator
-        "Home Win": "Home",
-        "Away Win": "Away",
-        "home": "Home",
-        "away": "Away",
-        "draw": "Draw",
-    },
-    "DC": {
-        "1X": "Home/Draw",
-        "12": "Home/Away",
-        "X2": "Draw/Away",
-        "Home/Draw": "Home/Draw",
-        "Home/Away": "Home/Away",
-        "Draw/Away": "Draw/Away",
-    },
-    "BTTS": {
-        "Yes": "Yes",
-        "No": "No",
-        "yes": "Yes",
-        "no": "No",
-    },
-    "OU2.5": {
-        "Over": "Over 2.5",
-        "Under": "Under 2.5",
-        "over": "Over 2.5",
-        "under": "Under 2.5",
-    },
-}
+def _get_bet_mapping(market_code: str) -> tuple[int | None, dict[str, str], float | None]:
+    """Get bet ID, outcome mapping, and line for a market code.
+
+    Uses the canonical mappings from sipap.sports.soccer.bet_mappings.
+
+    Returns:
+        Tuple of (bet_id, outcome_mapping, line) or (None, {}, None) if not found
+    """
+    try:
+        from sipap.sports.soccer.bet_mappings import get_bet_mapping
+        mapping = get_bet_mapping(market_code)
+        if mapping:
+            return mapping.bet_id, mapping.outcome_mapping, mapping.line
+    except ImportError:
+        logger.debug("bet_mappings not available, using fallback")
+
+    # Fallback mappings for core markets if bet_mappings not available
+    FALLBACK_MAPPINGS = {
+        "1X2": (1, {"Home Win": "Home", "Draw": "Draw", "Away Win": "Away", "Home": "Home", "Away": "Away"}, None),
+        "DC": (12, {"1X": "Home/Draw", "12": "Home/Away", "X2": "Draw/Away"}, None),
+        "BTTS": (8, {"Yes": "Yes", "No": "No"}, None),
+        "DNB": (10, {"Home Win": "Home", "Away Win": "Away", "Home": "Home", "Away": "Away"}, None),
+        "OU0.5": (5, {"Over 0.5": "Over 0.5", "Under 0.5": "Under 0.5"}, 0.5),
+        "OU1.5": (5, {"Over 1.5": "Over 1.5", "Under 1.5": "Under 1.5"}, 1.5),
+        "OU2.5": (5, {"Over 2.5": "Over 2.5", "Under 2.5": "Under 2.5"}, 2.5),
+        "OU3.5": (5, {"Over 3.5": "Over 3.5", "Under 3.5": "Under 3.5"}, 3.5),
+        "OU4.5": (5, {"Over 4.5": "Over 4.5", "Under 4.5": "Under 4.5"}, 4.5),
+        "HT_1X2": (13, {"1HT": "Home", "XHT": "Draw", "2HT": "Away"}, None),
+        "HT/FT": (7, {"1/1": "Home/Home", "1/X": "Home/Draw", "X/X": "Draw/Draw", "2/2": "Away/Away"}, None),
+    }
+    return FALLBACK_MAPPINGS.get(market_code, (None, {}, None))
 
 
 class APIFootballOddsClient:
@@ -141,19 +126,20 @@ class APIFootballOddsClient:
         Args:
             fixture_id: API-Football fixture ID
             market_code: Market code (e.g., "1X2", "DC", "BTTS")
-            outcome_code: Outcome code (e.g., "Home", "Away", "Yes")
+            outcome_code: Outcome code (e.g., "Home Win", "Away", "Yes")
 
         Returns:
             Dictionary with best_odds, bookmaker, and all_odds
         """
-        bet_id = MARKET_BET_IDS.get(market_code)
+        # Get bet mapping from canonical source
+        bet_id, outcome_map, line = _get_bet_mapping(market_code)
         if not bet_id:
             logger.debug(f"No bet ID mapping for market {market_code}")
             return {"best_odds": 0.0, "bookmaker": "", "all_odds": []}
 
-        # Map outcome to API format
-        outcome_map = OUTCOME_MAPPINGS.get(market_code, {})
+        # Map outcome to API format using the canonical mapping
         api_outcome = outcome_map.get(outcome_code, outcome_code)
+        logger.debug(f"Mapping {market_code}/{outcome_code} -> bet_id={bet_id}, api_outcome={api_outcome}")
 
         # Fetch odds
         response = await self.get_odds(fixture_id)
