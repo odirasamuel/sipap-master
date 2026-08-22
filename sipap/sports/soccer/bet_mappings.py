@@ -313,6 +313,104 @@ MARKET_TO_BET_ID: dict[str, BetMapping] = {
             "2&NG": "Away",
         },
     ),
+    "1X2_OU3.5": BetMapping(
+        market_code="1X2_OU3.5",
+        bet_id=1,
+        outcome_mapping={
+            "1&Over": "Home",
+            "1&Under": "Home",
+            "X&Over": "Draw",
+            "X&Under": "Draw",
+            "2&Over": "Away",
+            "2&Under": "Away",
+        },
+    ),
+    "1X2_OU4.5": BetMapping(
+        market_code="1X2_OU4.5",
+        bet_id=1,
+        outcome_mapping={
+            "1&Over": "Home",
+            "1&Under": "Home",
+            "X&Over": "Draw",
+            "X&Under": "Draw",
+            "2&Over": "Away",
+            "2&Under": "Away",
+        },
+    ),
+    # -------------------------------------------------------------------------
+    # DC Combination Markets
+    # -------------------------------------------------------------------------
+    "DC_OU1.5": BetMapping(
+        market_code="DC_OU1.5",
+        bet_id=12,  # Double Chance
+        outcome_mapping={
+            "1X&Over": "Home/Draw",
+            "1X&Under": "Home/Draw",
+            "12&Over": "Home/Away",
+            "12&Under": "Home/Away",
+            "X2&Over": "Draw/Away",
+            "X2&Under": "Draw/Away",
+        },
+    ),
+    "DC_OU2.5": BetMapping(
+        market_code="DC_OU2.5",
+        bet_id=12,
+        outcome_mapping={
+            "1X&Over": "Home/Draw",
+            "1X&Under": "Home/Draw",
+            "12&Over": "Home/Away",
+            "12&Under": "Home/Away",
+            "X2&Over": "Draw/Away",
+            "X2&Under": "Draw/Away",
+        },
+    ),
+    "DC_OU3.5": BetMapping(
+        market_code="DC_OU3.5",
+        bet_id=12,
+        outcome_mapping={
+            "1X&Over": "Home/Draw",
+            "1X&Under": "Home/Draw",
+            "12&Over": "Home/Away",
+            "12&Under": "Home/Away",
+            "X2&Over": "Draw/Away",
+            "X2&Under": "Draw/Away",
+        },
+    ),
+    "DC_BTTS": BetMapping(
+        market_code="DC_BTTS",
+        bet_id=12,
+        outcome_mapping={
+            "1X&GG": "Home/Draw",
+            "1X&NG": "Home/Draw",
+            "12&GG": "Home/Away",
+            "12&NG": "Home/Away",
+            "X2&GG": "Draw/Away",
+            "X2&NG": "Draw/Away",
+        },
+    ),
+    # -------------------------------------------------------------------------
+    # BTTS Combination Markets
+    # -------------------------------------------------------------------------
+    "BTTS_OU2.5": BetMapping(
+        market_code="BTTS_OU2.5",
+        bet_id=8,  # BTTS
+        outcome_mapping={
+            "GG&Over": "Yes",
+            "GG&Under": "Yes",
+            "NG&Over": "No",
+            "NG&Under": "No",
+        },
+    ),
+    "BTTS_OU3.5": BetMapping(
+        market_code="BTTS_OU3.5",
+        bet_id=8,
+        outcome_mapping={
+            "GG&Over": "Yes",
+            "GG&Under": "Yes",
+            "NG&Over": "No",
+            "NG&Under": "No",
+        },
+    ),
     # -------------------------------------------------------------------------
     # Chance Mix Markets (OR logic) - use component odds
     # -------------------------------------------------------------------------
@@ -350,6 +448,48 @@ MARKET_TO_BET_ID: dict[str, BetMapping] = {
             "1orUnder": "Home",
             "XorUnder": "Draw",
             "2orUnder": "Away",
+        },
+    ),
+    "CHANCEMIX_1X2_BTTS": BetMapping(
+        market_code="CHANCEMIX_1X2_BTTS",
+        bet_id=1,  # Use 1X2 odds as base
+        outcome_mapping={
+            "1orGG": "Home",
+            "XorGG": "Draw",
+            "2orGG": "Away",
+            "1orNG": "Home",
+            "XorNG": "Draw",
+            "2orNG": "Away",
+        },
+    ),
+    "CHANCEMIX_BTTS_OU15": BetMapping(
+        market_code="CHANCEMIX_BTTS_OU15",
+        bet_id=8,  # Use BTTS odds as base
+        outcome_mapping={
+            "GGorOver": "Yes",
+            "GGorUnder": "Yes",
+            "NGorUnder": "No",
+            "NGorOver": "No",
+        },
+    ),
+    "CHANCEMIX_BTTS_OU25": BetMapping(
+        market_code="CHANCEMIX_BTTS_OU25",
+        bet_id=8,  # Use BTTS odds as base
+        outcome_mapping={
+            "GGorOver": "Yes",
+            "GGorUnder": "Yes",
+            "NGorUnder": "No",
+            "NGorOver": "No",
+        },
+    ),
+    "CHANCEMIX_BTTS_OU35": BetMapping(
+        market_code="CHANCEMIX_BTTS_OU35",
+        bet_id=8,  # Use BTTS odds as base
+        outcome_mapping={
+            "GGorOver": "Yes",
+            "GGorUnder": "Yes",
+            "NGorUnder": "No",
+            "NGorOver": "No",
         },
     ),
     # -------------------------------------------------------------------------
