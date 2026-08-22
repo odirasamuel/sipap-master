@@ -269,17 +269,9 @@ class BatchOrchestrator:
                 f"📊 [{fixture_num}/{len(fixtures)}] Evaluating: {home_team} vs {away_team}"
             )
 
-            # Skip fixtures without odds
-            has_odds = (
-                fixture.get("best_home_odds") is not None
-                or fixture.get("best_draw_odds") is not None
-                or fixture.get("best_away_odds") is not None
-            )
-            if not has_odds:
-                self.logger.info(
-                    f"   Skipping - no odds available"
-                )
-                continue
+            # NOTE: We no longer skip fixtures without database odds
+            # Odds are fetched from API-Football during context aggregation
+            # This allows us to evaluate ALL fixtures regardless of database odds status
 
             try:
                 # Add delay between fixtures to prevent rate limiting
@@ -943,13 +935,14 @@ class BatchOrchestrator:
         data_mcp = self.mcp_factory.create("data")
 
         # Build search_fixtures parameters
-        # CRITICAL: Fetch ALL scheduled fixtures, don't filter by has_odds
-        # Let the orchestrator evaluate all fixtures through 5 AI agents
+        # CRITICAL: Fetch ALL scheduled fixtures WITHOUT filtering by has_odds
+        # Odds are fetched from API-Football during context aggregation
         # Quality gates (confidence + EV) are applied AFTER AI evaluation
         params = {
             "limit": limit,
             "status": "scheduled",
-            "has_odds": True,  # Need odds for EV calculation
+            # NOTE: has_odds removed - we fetch odds from API-Football directly
+            # during context aggregation, not from database
         }
 
         # Add league filter if specified

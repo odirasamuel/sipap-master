@@ -1448,7 +1448,7 @@ Focus on your specialized analysis approach based on your role.
                     "date_from": date,
                     "date_to": date,
                     "league_ids": league_ids or [],
-                    "has_odds": True,
+                      # NOTE: has_odds removed - odds fetched from API-Football
                 },
             )
             fixtures = fixtures_result.get("fixtures", []) if not isinstance(fixtures_result, Exception) else []
@@ -1769,7 +1769,7 @@ Focus on your specialized analysis approach based on your role.
                     "date_from": date,
                     "date_to": date,
                     "league_ids": league_ids or [],
-                    "has_odds": True,
+                      # NOTE: has_odds removed - odds fetched from API-Football
                 },
             )
             fixtures = fixtures_result.get("fixtures", []) if not isinstance(fixtures_result, Exception) else []
