@@ -41,6 +41,12 @@ OUTCOME_MAPPINGS = {
         "1": "Home",
         "X": "Draw",
         "2": "Away",
+        # Handle variations from market evaluator
+        "Home Win": "Home",
+        "Away Win": "Away",
+        "home": "Home",
+        "away": "Away",
+        "draw": "Draw",
     },
     "DC": {
         "1X": "Home/Draw",
@@ -53,10 +59,14 @@ OUTCOME_MAPPINGS = {
     "BTTS": {
         "Yes": "Yes",
         "No": "No",
+        "yes": "Yes",
+        "no": "No",
     },
     "OU2.5": {
         "Over": "Over 2.5",
         "Under": "Under 2.5",
+        "over": "Over 2.5",
+        "under": "Under 2.5",
     },
 }
 
