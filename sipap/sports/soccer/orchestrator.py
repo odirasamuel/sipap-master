@@ -184,17 +184,18 @@ class SoccerOrchestrator:
 
     async def resolve_match_id(self, match_identifier: str) -> str:
         """
-        Resolve match identifier to UUID.
+        Resolve match identifier to UUID or external ID.
 
-        Handles both UUID and natural language inputs:
+        Handles multiple input formats:
         - If UUID format: return as-is
+        - If numeric string (API-Football external ID): return as-is (batch processing)
         - If natural language (e.g., "Man United vs Liverpool"): search and return UUID
 
         Args:
-            match_identifier: Either UUID or natural language (team names)
+            match_identifier: UUID, external ID, or natural language (team names)
 
         Returns:
-            Match UUID string
+            Match identifier string (UUID or external ID)
 
         Raises:
             ValueError: If match cannot be resolved
@@ -202,6 +203,8 @@ class SoccerOrchestrator:
         Example:
             >>> # UUID input
             >>> match_id = await orchestrator.resolve_match_id("550e8400-e29b-41d4-a716-446655440000")
+            >>> # External ID input (API-Football fixture ID)
+            >>> match_id = await orchestrator.resolve_match_id("1569889")
             >>> # Natural language input
             >>> match_id = await orchestrator.resolve_match_id("Manchester United vs Liverpool")
         """
@@ -213,7 +216,13 @@ class SoccerOrchestrator:
         except ValueError:
             pass
 
-        # Not a UUID - treat as natural language search query
+        # Check if it's a numeric string (API-Football external ID)
+        # External IDs are used in batch processing where fixtures come from API-Football
+        if match_identifier.isdigit():
+            self.logger.debug(f"Match identifier is external ID: {match_identifier}")
+            return match_identifier
+
+        # Not a UUID or external ID - treat as natural language search query
         self.logger.debug(f"Resolving natural language match identifier: {match_identifier}")
 
         try:
