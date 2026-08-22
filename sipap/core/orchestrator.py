@@ -800,7 +800,10 @@ class MainOrchestrator:
             #    3️⃣ Over 2.5 @1.95 (68%, +3%)
             selections_text = []
             for i, selection in enumerate(result["selections"], 1):
-                fixture = selection["fixture"]
+                fixture = selection.get("fixture", {})
+                # Handle fixture being a string (fixture ID) instead of dict
+                if isinstance(fixture, str):
+                    fixture = {"home_team": "Team A", "away_team": "Team B", "id": fixture}
                 home = fixture.get("home_team", "Home")
                 away = fixture.get("away_team", "Away")
                 # Handle both dict and string formats for team names
