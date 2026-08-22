@@ -1565,7 +1565,12 @@ Focus on your specialized analysis approach based on your role.
                 selection = {
                     "fixture_id": str(fixture_id),
                     "external_id": int(external_id),
-                    "fixture": f"{home_team_name} vs {away_team_name}",
+                    "fixture": {
+                        "home_team": home_team_name,
+                        "away_team": away_team_name,
+                        "id": str(fixture_id),
+                        "league": fixture.get("league_name", fixture.get("league", "Unknown")),
+                    },
                     "scheduled_at": fixture.get("scheduled_at"),
                     "league": fixture.get("league_name", fixture.get("league", "Unknown")),
                     "market_code": top.get("market_code"),
@@ -1858,7 +1863,12 @@ Focus on your specialized analysis approach based on your role.
                         all_selections.append({
                             "fixture_id": str(fixture_id),
                             "external_id": int(external_id),
-                            "fixture": f"{home_team_name} vs {away_team_name}",
+                            "fixture": {
+                                "home_team": home_team_name,
+                                "away_team": away_team_name,
+                                "id": str(fixture_id),
+                                "league": fixture.get("league_name", fixture.get("league", "Unknown")),
+                            },
                             "scheduled_at": fixture.get("scheduled_at"),
                             "league": fixture.get("league_name", fixture.get("league", "Unknown")),
                             "market_code": evaluation.market_code,
