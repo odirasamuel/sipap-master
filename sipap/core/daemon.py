@@ -990,7 +990,7 @@ def start_daemon(
 
     # Initialize Redis client for message deduplication
     deduplicator = None
-    redis_endpoint = os.environ.get("REDIS_ENDPOINT")
+    redis_endpoint = os.environ.get("REDIS_ENDPOINT") or os.environ.get("REDIS_HOST")
     if redis_endpoint:
         try:
             redis_ssl = os.environ.get("REDIS_SSL", "false").lower() == "true"
@@ -1006,7 +1006,7 @@ def start_daemon(
             logger.warning(f"Failed to initialize Redis for deduplication: {e}")
             logger.warning("Message deduplication DISABLED - Continuing without deduplication")
     else:
-        logger.warning("REDIS_ENDPOINT not set - Message deduplication DISABLED")
+        logger.warning("REDIS_ENDPOINT/REDIS_HOST not set - Message deduplication DISABLED")
 
     # Initialize Twilio WhatsApp client (optional - only if delivery enabled)
     twilio_client = None
