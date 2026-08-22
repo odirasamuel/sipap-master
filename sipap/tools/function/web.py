@@ -3,11 +3,41 @@
 These are @tool decorated functions that agents can call to fetch web content.
 """
 
+import re
 from typing import Any
 
 import httpx
 from bs4 import BeautifulSoup
 from strands import tool
+
+
+def strip_html_tags(text: str) -> str:
+    """
+    Remove any remaining HTML tags from text.
+
+    This is a safety measure to ensure no HTML tags are passed to the agent,
+    which can cause issues with Strands/Bedrock content parsing.
+
+    Args:
+        text: Text that might contain HTML tags
+
+    Returns:
+        Clean text with all HTML tags removed
+    """
+    if not text:
+        return ""
+    # Remove HTML tags using regex
+    clean = re.sub(r'<[^>]+>', '', text)
+    # Also handle common HTML entities
+    clean = clean.replace('&nbsp;', ' ')
+    clean = clean.replace('&amp;', '&')
+    clean = clean.replace('&lt;', '<')
+    clean = clean.replace('&gt;', '>')
+    clean = clean.replace('&quot;', '"')
+    clean = clean.replace('&#39;', "'")
+    # Clean up multiple spaces
+    clean = re.sub(r'\s+', ' ', clean)
+    return clean.strip()
 
 
 @tool
@@ -101,10 +131,14 @@ async def web_fetch(url: str, query: str) -> dict[str, Any]:  # noqa: C901
             # Clean up excessive whitespace
             content = " ".join(content.split())
 
+            # Strip any remaining HTML tags to prevent Strands parsing errors
+            content = strip_html_tags(content)
+            title = strip_html_tags(title.strip())
+
             return {
                 "url": url,
                 "content": content,
-                "title": title.strip(),
+                "title": title,
                 "published": published,
                 "status": "success"
             }

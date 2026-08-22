@@ -59,17 +59,35 @@ class SoccerOrchestrator:
 
         # Initialize DatabaseManager for Aurora PostgreSQL
         # Use environment variable or construct from components
+        # Check for multiple possible environment variable names
         database_url = os.environ.get("DATABASE_URL")
-        if not database_url:
+        db_host = os.environ.get("DB_HOST") or os.environ.get("RDS_HOST") or os.environ.get("RDS_ENDPOINT")
+
+        # Only initialize database if we have a valid host (not localhost in production)
+        self.db: DatabaseManager | None = None
+        self._db_enabled = False
+
+        if database_url:
+            # Full DATABASE_URL provided
+            self.db = DatabaseManager(database_url, use_pool=True)
+            self._db_enabled = True
+            self.logger.info("Database initialized with DATABASE_URL")
+        elif db_host and db_host != "localhost":
             # Construct from individual environment variables
-            db_host = os.environ.get("DB_HOST", "localhost")
             db_port = os.environ.get("DB_PORT", "5432")
             db_name = os.environ.get("DB_NAME", "sipap")
             db_user = os.environ.get("DB_USER", "sipap")
             db_password = os.environ.get("DB_PASSWORD", "sipap")
             database_url = f"postgresql+psycopg2://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
-
-        self.db = DatabaseManager(database_url, use_pool=True)
+            self.db = DatabaseManager(database_url, use_pool=True)
+            self._db_enabled = True
+            self.logger.info(f"Database initialized with DB_HOST: {db_host}")
+        else:
+            # No database configured - predictions will not be saved
+            self.logger.warning(
+                "Database not configured (DB_HOST/RDS_HOST/DATABASE_URL not set). "
+                "Predictions will NOT be saved to database."
+            )
 
         # Check if DEBUG logging is enabled
         self.debug_enabled = self.logger.isEnabledFor(logging.DEBUG)
@@ -922,6 +940,15 @@ Focus on your specialized analysis approach based on your role.
             DatabaseError: If save operation fails
         """
         self.logger.debug(f"Saving prediction for match {match_id}")
+
+        # Check if database is enabled
+        if not self._db_enabled or self.db is None:
+            self.logger.debug("Database not configured - skipping save")
+            return {
+                "status": "SKIPPED",
+                "prediction_id": None,
+                "message": "Database not configured",
+            }
 
         # Generate prediction ID
         prediction_id = uuid.uuid4()
