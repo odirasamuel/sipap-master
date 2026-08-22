@@ -993,12 +993,10 @@ def start_daemon(
     redis_endpoint = os.environ.get("REDIS_ENDPOINT") or os.environ.get("REDIS_HOST")
     if redis_endpoint:
         try:
-            redis_ssl = os.environ.get("REDIS_SSL", "false").lower() == "true"
             redis_client = RedisCache(
                 host=redis_endpoint,
                 port=int(os.environ.get("REDIS_PORT", "6379")),
                 password=os.environ.get("REDIS_PASSWORD"),
-                ssl=redis_ssl,
             )
             deduplicator = MessageDeduplicator(redis_client, ttl_seconds=3600)
             logger.info(f"Message deduplication ENABLED (Redis: {redis_endpoint})")
