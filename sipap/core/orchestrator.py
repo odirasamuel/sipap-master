@@ -745,12 +745,16 @@ class MainOrchestrator:
                 "error": None | "...",
             }
         """
-        target = intent.target_odds or 20.0  # Default to 20 odds
-        # Ensure target is a float for formatting
-        try:
-            target = float(target)
-        except (ValueError, TypeError):
-            target = 20.0
+        # Only use target if user explicitly specified it
+        user_specified_target = intent.target_odds is not None
+        target = intent.target_odds if user_specified_target else None
+        # Ensure target is a float for formatting if specified
+        if target is not None:
+            try:
+                target = float(target)
+            except (ValueError, TypeError):
+                target = None
+                user_specified_target = False
 
         try:
             # Call BatchOrchestrator to process request
@@ -922,11 +926,17 @@ class MainOrchestrator:
             if warning:
                 warning_text = f"\n⚠️ {warning}"
 
-            # Build header
-            header = (
-                f"🎯 Batch Prediction\n"
-                f"Target: {target:.1f} | Achieved: {accumulated_odds:.1f} ({num_selections})\n"
-            )
+            # Build header - only show target if user specified one
+            if user_specified_target and target is not None:
+                header = (
+                    f"🎯 Batch Prediction\n"
+                    f"Target: {target:.1f} | Achieved: {accumulated_odds:.1f} ({num_selections})\n"
+                )
+            else:
+                header = (
+                    f"🎯 Batch Prediction\n"
+                    f"Accumulated Odds: {accumulated_odds:.1f} ({num_selections} selections)\n"
+                )
             if filters_str:
                 header += f"{filters_str}\n"
             header += f"\n📊 Selections:\n"
