@@ -813,18 +813,37 @@ class MainOrchestrator:
 
             filters_str = "\n".join(filters_text) if filters_text else "No filters applied"
 
-            # Build selections text showing TOP 3 markets per fixture
+            # Build selections text - group by fixture to avoid duplicates
             # Format:
             # 1. Arsenal v Chelsea [PL]
-            #    ⭐ BTTS Yes @1.85 (72%, +8%)
-            #    2️⃣ Home @2.50 (65%, +5%)
-            #    3️⃣ Over 2.5 @1.95 (68%, +3%)
+            #    ⭐ 1X2: Home @2.50 (72%)
+            #    ⭐ DC: Home/Draw @1.45 (85%)
             selections_text = []
-            for i, selection in enumerate(result["selections"], 1):
+
+            # Check if this is market-filtered format (selections have fixture_id)
+            # Group selections by fixture to avoid duplicates
+            grouped_by_fixture: dict[str, list[dict]] = {}
+            for selection in result["selections"]:
+                # Get fixture identifier
                 fixture = selection.get("fixture", {})
-                # Handle fixture being a string (fixture ID) instead of dict
+                if isinstance(fixture, str):
+                    fixture_key = fixture
+                    fixture = {"home_team": "Team A", "away_team": "Team B", "id": fixture}
+                else:
+                    fixture_key = fixture.get("id") or f"{fixture.get('home_team', '')}_{fixture.get('away_team', '')}"
+
+                if fixture_key not in grouped_by_fixture:
+                    grouped_by_fixture[fixture_key] = []
+                grouped_by_fixture[fixture_key].append(selection)
+
+            # Format each fixture with its markets
+            for i, (fixture_key, fixture_selections) in enumerate(grouped_by_fixture.items(), 1):
+                # Get fixture info from first selection
+                first_selection = fixture_selections[0]
+                fixture = first_selection.get("fixture", {})
                 if isinstance(fixture, str):
                     fixture = {"home_team": "Team A", "away_team": "Team B", "id": fixture}
+
                 home = fixture.get("home_team", "Home")
                 away = fixture.get("away_team", "Away")
                 # Handle both dict and string formats for team names
@@ -833,7 +852,7 @@ class MainOrchestrator:
                 if isinstance(away, dict):
                     away = away.get("name", "Away")
 
-                league = fixture.get("league", "")
+                league = fixture.get("league", "") or first_selection.get("league", "")
                 if isinstance(league, dict):
                     league = league.get("name", "")
 
@@ -845,11 +864,11 @@ class MainOrchestrator:
                 fixture_line = f"{i}. {home} v {away}{league_tag}"
                 selections_text.append(fixture_line)
 
-                # Get top markets (new structure) or fall back to legacy
-                top_markets = selection.get("top_markets", [])
-
-                if top_markets:
-                    # NEW FORMAT: Show top 3 markets with best highlighted
+                # Check if selections have top_markets (batch orchestrator format)
+                # or are individual market selections (market-filtered format)
+                if first_selection.get("top_markets"):
+                    # BATCH FORMAT: Each selection has top_markets list
+                    top_markets = first_selection.get("top_markets", [])
                     rank_icons = ["⭐", "2️⃣", "3️⃣"]
                     for j, market in enumerate(top_markets[:3]):
                         icon = rank_icons[j] if j < len(rank_icons) else f"{j+1}."
@@ -859,12 +878,11 @@ class MainOrchestrator:
                         ev = market.get("ev", 0)
                         market_name = market.get("market_name", market.get("market_code", ""))
 
-                        # Ensure numeric types for formatting (may be strings from LLM)
+                        # Ensure numeric types
                         try:
                             odd = float(odd) if odd else 0.0
                             conf = float(conf) if conf else 0.0
                             ev = float(ev) if ev else 0.0
-                            # Normalize if conf/ev are percentages (>1 means already %)
                             if conf > 1:
                                 conf = conf / 100
                             if abs(ev) > 1:
@@ -872,39 +890,30 @@ class MainOrchestrator:
                         except (ValueError, TypeError):
                             odd, conf, ev = 0.0, 0.0, 0.0
 
-                        # Format: "   ⭐ BTTS Yes @1.85 (72%, +8%)"
-                        market_line = f"   {icon} {outcome} @{odd:.2f} ({conf:.0%}, {ev:+.0%})"
+                        market_line = f"   {icon} {market_name}: {outcome} @{odd:.2f} ({conf:.0%})"
                         selections_text.append(market_line)
                 else:
-                    # LEGACY FORMAT: Single best market (backward compatibility)
-                    # Support both old format (best_outcome, bookmaker_odd) and
-                    # new market-filtered format (outcome, odds, probability)
-                    outcome = selection.get("best_outcome") or selection.get("outcome", "?")
-                    odd = selection.get("bookmaker_odd") or selection.get("odds", 0)
-                    # For confidence, use confidence field or probability field
-                    conf = selection.get("confidence") or selection.get("probability", 0)
-                    ev = selection.get("ev", 0)
+                    # MARKET-FILTERED FORMAT: Each selection IS a market evaluation
+                    # Show all markets for this fixture
+                    for sel in fixture_selections:
+                        # Get market details from selection
+                        market_code = sel.get("market_code") or sel.get("market_name", "")
+                        outcome = sel.get("outcome") or sel.get("best_outcome", "?")
+                        odd = sel.get("odds") or sel.get("bookmaker_odd", 0)
+                        prob = sel.get("probability") or sel.get("confidence", 0)
 
-                    # Include market name in output for market-filtered requests
-                    market_name = selection.get("market_name") or selection.get("market_code", "")
-                    if market_name and outcome != "?":
-                        outcome = f"{market_name}: {outcome}"
+                        # Ensure numeric types
+                        try:
+                            odd = float(odd) if odd else 0.0
+                            prob = float(prob) if prob else 0.0
+                            if prob > 1:
+                                prob = prob / 100
+                        except (ValueError, TypeError):
+                            odd, prob = 0.0, 0.0
 
-                    # Ensure numeric types for formatting (may be strings from LLM)
-                    try:
-                        odd = float(odd) if odd else 0.0
-                        conf = float(conf) if conf else 0.0
-                        ev = float(ev) if ev else 0.0
-                        # Normalize if conf/ev are percentages (>1 means already %)
-                        if conf > 1:
-                            conf = conf / 100
-                        if abs(ev) > 1:
-                            ev = ev / 100
-                    except (ValueError, TypeError):
-                        odd, conf, ev = 0.0, 0.0, 0.0
-
-                    market_line = f"   ⭐ {outcome} @{odd:.2f} ({conf:.0%}, {ev:+.0%})"
-                    selections_text.append(market_line)
+                        # Format: "   ⭐ 1X2: Home @2.50 (72%)"
+                        market_line = f"   ⭐ {market_code}: {outcome} @{odd:.2f} ({prob:.0%})"
+                        selections_text.append(market_line)
 
             selections_str = "\n".join(selections_text) if selections_text else "No selections"
 
