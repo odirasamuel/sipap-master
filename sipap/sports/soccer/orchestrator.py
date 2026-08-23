@@ -59,9 +59,14 @@ class SoccerOrchestrator:
 
         # Initialize DatabaseManager for Aurora PostgreSQL
         # Use environment variable or construct from components
-        # Check for multiple possible environment variable names
+        # Check for multiple possible environment variable names (supports both Terraform and local dev)
         database_url = os.environ.get("DATABASE_URL")
-        db_host = os.environ.get("DB_HOST") or os.environ.get("RDS_HOST") or os.environ.get("RDS_ENDPOINT")
+        db_host = (
+            os.environ.get("DB_HOST") or
+            os.environ.get("RDS_HOST") or
+            os.environ.get("RDS_ENDPOINT") or
+            os.environ.get("POSTGRES_HOST")  # Terraform uses this name
+        )
 
         # Only initialize database if we have a valid host (not localhost in production)
         self.db: DatabaseManager | None = None
@@ -75,17 +80,37 @@ class SoccerOrchestrator:
         elif db_host and db_host != "localhost":
             # Construct from individual environment variables
             db_port = os.environ.get("DB_PORT", "5432")
-            db_name = os.environ.get("DB_NAME", "sipap")
-            db_user = os.environ.get("DB_USER", "sipap")
-            db_password = os.environ.get("DB_PASSWORD", "sipap")
+            db_name = os.environ.get("DB_NAME") or os.environ.get("POSTGRES_DB", "sipap")
+
+            # Get credentials - check POSTGRES_CREDENTIALS (JSON from Secrets Manager) first
+            db_user = os.environ.get("DB_USER")
+            db_password = os.environ.get("DB_PASSWORD")
+
+            postgres_creds = os.environ.get("POSTGRES_CREDENTIALS")
+            if postgres_creds and not (db_user and db_password):
+                try:
+                    import json
+                    creds = json.loads(postgres_creds)
+                    db_user = creds.get("username", db_user)
+                    db_password = creds.get("password", db_password)
+                except (json.JSONDecodeError, TypeError):
+                    self.logger.warning("Failed to parse POSTGRES_CREDENTIALS JSON")
+
+            # Fall back to defaults if still not set
+            db_user = db_user or "sipap_admin"
+            db_password = db_password or ""
+
+            if not db_password:
+                self.logger.warning("Database password not configured - connection may fail")
+
             database_url = f"postgresql+psycopg2://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
             self.db = DatabaseManager(database_url, use_pool=True)
             self._db_enabled = True
-            self.logger.info(f"Database initialized with DB_HOST: {db_host}")
+            self.logger.info(f"Database initialized with host: {db_host}")
         else:
             # No database configured - predictions will not be saved
             self.logger.warning(
-                "Database not configured (DB_HOST/RDS_HOST/DATABASE_URL not set). "
+                "Database not configured (DB_HOST/POSTGRES_HOST/DATABASE_URL not set). "
                 "Predictions will NOT be saved to database."
             )
 
