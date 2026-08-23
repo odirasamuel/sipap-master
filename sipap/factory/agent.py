@@ -120,18 +120,21 @@ class AgentToolFactory:
         Note:
             Claude prompt caching significantly reduces token usage by caching
             the system prompt. The system prompt (~1000+ tokens) is cached for
-            5 minutes, reducing costs by ~90% for repeated agent calls.
+            1 hour, reducing costs by ~90% for repeated agent calls.
         """
         from strands.models import BedrockModel
+        from strands.models.model import CacheConfig
 
         return BedrockModel(
             model_id=model_config["model_id"],
             max_tokens=model_config.get("max_tokens", 4096),
             temperature=model_config.get("temperature", 0.1),
-            # Enable Claude prompt caching (2026-08-23)
+            # Enable Claude prompt caching with 1-hour TTL (2026-08-23)
             # This caches the system prompt, reducing token usage by ~90%
-            # for repeated calls within the 5-minute TTL
-            cache_prompt="auto",  # Automatically cache system prompt
+            cache_config=CacheConfig(
+                strategy="auto",  # Automatically detect and inject cache points
+                ttl="1h",         # Cache for 1 hour (default is 5 minutes)
+            ),
             cache_tools="auto",   # Cache tool definitions too
         )
 
