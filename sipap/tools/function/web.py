@@ -28,13 +28,17 @@ def strip_html_tags(text: str) -> str:
         return ""
     # Remove HTML tags using regex
     clean = re.sub(r'<[^>]+>', '', text)
-    # Also handle common HTML entities
+    # Handle common HTML entities - BUT convert angle brackets to safe chars
+    # IMPORTANT: Do NOT convert &lt; and &gt; to < and > as this creates new HTML-like tags
+    # that Strands/Bedrock interprets as content types (e.g., <P> becomes content_type=P)
     clean = clean.replace('&nbsp;', ' ')
     clean = clean.replace('&amp;', '&')
-    clean = clean.replace('&lt;', '<')
-    clean = clean.replace('&gt;', '>')
+    clean = clean.replace('&lt;', '[')  # Convert to safe bracket
+    clean = clean.replace('&gt;', ']')  # Convert to safe bracket
     clean = clean.replace('&quot;', '"')
     clean = clean.replace('&#39;', "'")
+    # Remove any stray angle brackets that might still exist
+    clean = clean.replace('<', '[').replace('>', ']')
     # Clean up multiple spaces
     clean = re.sub(r'\s+', ' ', clean)
     return clean.strip()
@@ -134,6 +138,7 @@ async def web_fetch(url: str, query: str) -> dict[str, Any]:  # noqa: C901
             # Strip any remaining HTML tags to prevent Strands parsing errors
             content = strip_html_tags(content)
             title = strip_html_tags(title.strip())
+            published = strip_html_tags(published)
 
             return {
                 "url": url,

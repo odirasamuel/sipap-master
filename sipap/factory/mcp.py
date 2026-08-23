@@ -10,6 +10,7 @@ This factory:
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -20,6 +21,44 @@ import yaml
 from jinja2 import Environment
 
 from sipap.core.mcp_client import MCPClient
+
+
+def _strip_html_from_value(value: Any) -> Any:
+    """
+    Recursively strip HTML tags from string values in dicts/lists.
+
+    This prevents Strands/Bedrock from misinterpreting HTML tags like <P>
+    as content types, which causes parsing errors.
+
+    Args:
+        value: Any value (string, dict, list, or other)
+
+    Returns:
+        Value with HTML tags stripped from all strings
+    """
+    if isinstance(value, str):
+        # Remove HTML tags
+        clean = re.sub(r'<[^>]+>', '', value)
+        # Handle common HTML entities - BUT convert angle brackets to safe chars
+        # IMPORTANT: Do NOT convert &lt; and &gt; to < and > as this creates new HTML-like tags
+        # that Strands/Bedrock interprets as content types (e.g., <P> becomes content_type=P)
+        clean = clean.replace('&nbsp;', ' ')
+        clean = clean.replace('&amp;', '&')
+        clean = clean.replace('&lt;', '[')  # Convert to safe bracket
+        clean = clean.replace('&gt;', ']')  # Convert to safe bracket
+        clean = clean.replace('&quot;', '"')
+        clean = clean.replace('&#39;', "'")
+        # Remove any stray angle brackets that might still exist
+        clean = clean.replace('<', '[').replace('>', ']')
+        # Clean up multiple spaces
+        clean = re.sub(r'\s+', ' ', clean)
+        return clean.strip()
+    elif isinstance(value, dict):
+        return {k: _strip_html_from_value(v) for k, v in value.items()}
+    elif isinstance(value, list):
+        return [_strip_html_from_value(item) for item in value]
+    else:
+        return value
 
 
 class MCPFactory:
@@ -413,7 +452,11 @@ class MCPFactory:
                     """MCP tool wrapper (dynamically created)."""
                     try:
                         result = await mcp_client.call_tool(name, kwargs)
-                        return result
+                        # Strip HTML from result to prevent Strands parsing errors
+                        # This handles cases where MCP returns HTML content that
+                        # Strands misinterprets as content types (e.g., <P>)
+                        sanitized_result = _strip_html_from_value(result)
+                        return sanitized_result
                     except Exception as e:
                         self.logger.error(
                             f"MCP tool call failed: {server}.{name}",
