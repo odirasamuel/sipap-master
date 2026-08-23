@@ -134,21 +134,30 @@ class APIFootballOddsClient:
         # Get bet mapping from canonical source
         bet_id, outcome_map, line = _get_bet_mapping(market_code)
         if not bet_id:
-            logger.debug(f"No bet ID mapping for market {market_code}")
+            logger.warning(f"No bet ID mapping for market {market_code}")
             return {"best_odds": 0.0, "bookmaker": "", "all_odds": []}
 
         # Map outcome to API format using the canonical mapping
         api_outcome = outcome_map.get(outcome_code, outcome_code)
-        logger.debug(f"Mapping {market_code}/{outcome_code} -> bet_id={bet_id}, api_outcome={api_outcome}")
+        logger.info(f"Fetching odds: {market_code}/{outcome_code} -> bet_id={bet_id}, api_outcome={api_outcome}")
 
         # Fetch odds
         response = await self.get_odds(fixture_id)
 
         if not response.get("response"):
+            logger.warning(f"No odds response for fixture {fixture_id}")
             return {"best_odds": 0.0, "bookmaker": "", "all_odds": []}
 
         fixture_odds = response["response"][0]
         bookmakers = fixture_odds.get("bookmakers", [])
+
+        # Log available bets for debugging DNB issue
+        if bookmakers:
+            first_bookmaker = bookmakers[0]
+            available_bet_ids = [bet["id"] for bet in first_bookmaker.get("bets", [])]
+            logger.debug(f"Fixture {fixture_id}: available bet IDs from {first_bookmaker['name']}: {available_bet_ids}")
+            if bet_id not in available_bet_ids:
+                logger.warning(f"Fixture {fixture_id}: bet_id={bet_id} ({market_code}) not available. Available: {available_bet_ids}")
 
         best_odds = 0.0
         best_bookmaker = ""
@@ -185,6 +194,14 @@ class APIFootballOddsClient:
                                 best_bookmaker = bookmaker["name"]
                         except (ValueError, TypeError):
                             continue
+
+        if best_odds == 0.0:
+            logger.warning(
+                f"No odds found for fixture {fixture_id}: {market_code}/{outcome_code} "
+                f"(bet_id={bet_id}, api_outcome={api_outcome})"
+            )
+        else:
+            logger.info(f"Found odds: {market_code}/{outcome_code} = {best_odds} @ {best_bookmaker}")
 
         return {
             "best_odds": best_odds,
