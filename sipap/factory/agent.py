@@ -109,20 +109,30 @@ class AgentToolFactory:
         return template.render(**os.environ)
 
     def _create_model(self, model_config: dict[str, Any]) -> Any:
-        """Create Bedrock model instance.
+        """Create Bedrock model instance with Claude prompt caching enabled.
 
         Args:
             model_config: Model configuration from YAML
 
         Returns:
-            Bedrock model instance
+            Bedrock model instance with prompt caching
+
+        Note:
+            Claude prompt caching significantly reduces token usage by caching
+            the system prompt. The system prompt (~1000+ tokens) is cached for
+            5 minutes, reducing costs by ~90% for repeated agent calls.
         """
         from strands.models import BedrockModel
 
         return BedrockModel(
             model_id=model_config["model_id"],
             max_tokens=model_config.get("max_tokens", 4096),
-            temperature=model_config.get("temperature", 0.1)
+            temperature=model_config.get("temperature", 0.1),
+            # Enable Claude prompt caching (2026-08-23)
+            # This caches the system prompt, reducing token usage by ~90%
+            # for repeated calls within the 5-minute TTL
+            cache_prompt="auto",  # Automatically cache system prompt
+            cache_tools="auto",   # Cache tool definitions too
         )
 
     def _create_output_model(self, output_schema: dict[str, Any]) -> type[BaseModel] | None:
