@@ -688,10 +688,13 @@ Focus on your specialized analysis approach based on your role.
 
         # Step 4: Create agents (3-agent ensemble: Statistical, Form, News)
         # Create agents (only log if DEBUG enabled)
+        # Check ENABLED_AGENTS env var to control which agents run (default: all)
+        enabled_agents_str = os.environ.get("ENABLED_AGENTS", "statistical,form,news")
+        enabled_agents = [a.strip() for a in enabled_agents_str.split(",") if a.strip()]
         if self.debug_enabled:
-            self.logger.debug("Creating agents...")
+            self.logger.debug(f"Creating agents: {enabled_agents}")
         agents: dict[str, Any] = {}
-        for agent_name in ["statistical", "form", "news"]:
+        for agent_name in enabled_agents:
             try:
                 agent = self.agent_factory.create(agent_name, tools=agent_tools[agent_name])
                 agents[agent_name] = agent
@@ -1323,16 +1326,28 @@ Focus on your specialized analysis approach based on your role.
         Returns:
             Ensemble prediction dictionary
         """
-        # Weighted average (3-agent ensemble - ML removed from MVP)
-        weights = {
-            "statistical": 0.40,  # Primary: Long-term statistical analysis (6 seasons)
-            "form": 0.40,         # Primary: Recent performance patterns (10-15 matches)
-            "news": 0.20,         # Contextual: Current reality adjustments (injuries, suspensions)
-        }
+        # Weighted average ensemble
+        # When all 3 agents: statistical=40%, form=40%, news=20%
+        # When news disabled: statistical=50%, form=50% (news weight redistributed)
+        present_agents = {p["agent"] for p in agent_predictions}
+
+        if "news" in present_agents:
+            # Full 3-agent ensemble
+            weights = {
+                "statistical": 0.40,
+                "form": 0.40,
+                "news": 0.20,
+            }
+        else:
+            # News disabled - redistribute weight to statistical and form
+            weights = {
+                "statistical": 0.50,
+                "form": 0.50,
+            }
 
         # Extract probabilities and calculate weighted average
         probabilities = [
-            p["prediction"]["probability"] * weights[p["agent"]]
+            p["prediction"]["probability"] * weights.get(p["agent"], 0)
             for p in agent_predictions
         ]
 
