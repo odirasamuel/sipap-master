@@ -418,20 +418,24 @@ class BatchOrchestrator:
             self.logger.info(
                 "No date range specified - using incremental expansion starting from today"
             )
+            # Convert LeagueEntity objects to league names (strings)
+            league_names_for_expansion = [league.name for league in intent.leagues] if intent.leagues else None
             result = await self._process_with_incremental_expansion(
                 user_id=user_id,
                 target=target,
                 quality_threshold=quality_threshold,
                 thresholds=thresholds,
-                leagues=intent.leagues,
+                leagues=league_names_for_expansion,
                 max_days=7,  # Maximum 7 days expansion
             )
             return result
 
         # Step 2 (fallback): Query fixtures with explicit date range
+        # Convert LeagueEntity objects to league names (strings)
+        league_names = [league.name for league in intent.leagues] if intent.leagues else None
         try:
             fixtures = await self._get_filtered_matches(
-                leagues=intent.leagues,
+                leagues=league_names,
                 date_range=intent.date_range,
                 limit=100,  # Over-fetch for filtering
             )
