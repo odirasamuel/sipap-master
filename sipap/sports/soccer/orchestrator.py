@@ -1131,6 +1131,7 @@ Focus on your specialized analysis approach based on your role.
                 {"market": "DC", "1x_odds": 1.27, "12_odds": 1.42, "x2_odds": 1.12, ...},
                 {"market": "OU2.5", "over_odds": 1.47, "under_odds": 2.75, ...},
                 {"market": "BTTS", "yes_odds": 1.85, "no_odds": 1.95, ...},
+                {"market": "HT_1X2", "home_odds": 2.80, "draw_odds": 2.10, "away_odds": 4.50, ...},
                 ...
             ]
         }
@@ -1145,6 +1146,7 @@ Focus on your specialized analysis approach based on your role.
                 "1x": 1.27, "12": 1.42, "x2": 1.12,        # DC
                 "over_2.5": 1.47, "under_2.5": 2.75,       # OU2.5
                 "btts_yes": 1.85, "btts_no": 1.95,         # BTTS
+                "home_ht": 2.80, "draw_ht": 2.10, "away_ht": 4.50,  # HT_1X2
             }
         """
         best_odds: dict[str, float] = {}
@@ -1217,6 +1219,18 @@ Focus on your specialized analysis approach based on your role.
                 if no and no > best_odds.get("btts_no", 0):
                     best_odds["btts_no"] = float(no)
 
+            # HT_1X2 (Halftime Result) market - bet_id=13 in API-Football
+            if market == "HT_1X2" or "halftime" in market.lower() or "half time" in market.lower():
+                ht_home = bookmaker.get("home_odds", 0) or bookmaker.get("home", 0)
+                ht_draw = bookmaker.get("draw_odds", 0) or bookmaker.get("draw", 0)
+                ht_away = bookmaker.get("away_odds", 0) or bookmaker.get("away", 0)
+                if ht_home and ht_home > best_odds.get("home_ht", 0):
+                    best_odds["home_ht"] = float(ht_home)
+                if ht_draw and ht_draw > best_odds.get("draw_ht", 0):
+                    best_odds["draw_ht"] = float(ht_draw)
+                if ht_away and ht_away > best_odds.get("away_ht", 0):
+                    best_odds["away_ht"] = float(ht_away)
+
         return best_odds
 
     def _map_outcome_to_odds_key(self, outcome: str, market: str = "") -> str | None:
@@ -1239,6 +1253,16 @@ Focus on your specialized analysis approach based on your role.
                 return "btts_yes"
             if "no" in outcome_lower:
                 return "btts_no"
+
+        # HT_1X2 (Halftime Result) market
+        if market_upper == "HT_1X2" or "halftime" in market_upper.lower() or "ht" in market_upper:
+            # Match outcomes like "1HT", "XHT", "2HT" or "Home HT", "Draw HT", "Away HT"
+            if any(p in outcome_lower for p in ["1ht", "home"]):
+                return "home_ht"
+            if any(p in outcome_lower for p in ["xht", "draw"]):
+                return "draw_ht"
+            if any(p in outcome_lower for p in ["2ht", "away"]):
+                return "away_ht"
 
         # Over/Under market
         if market_upper.startswith("OU") or "over" in outcome_lower or "under" in outcome_lower:
