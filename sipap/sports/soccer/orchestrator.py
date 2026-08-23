@@ -24,6 +24,29 @@ from sipap.factory.agent import AgentToolFactory
 from sipap.factory.mcp import MCPFactory
 from sipap.sports.soccer.market_evaluator import MarketEvaluator, MarketEvaluation
 
+# Namespace UUID for generating deterministic match UUIDs from API-Football fixture IDs
+# This allows storing integer fixture IDs in UUID columns without schema changes
+SIPAP_FIXTURE_NAMESPACE = uuid.UUID("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
+
+
+def fixture_id_to_uuid(fixture_id: int | str) -> uuid.UUID:
+    """Convert API-Football fixture ID to deterministic UUID.
+
+    Uses UUID5 (SHA-1 based) to generate consistent UUIDs from fixture IDs.
+    The same fixture ID will always produce the same UUID.
+
+    Args:
+        fixture_id: API-Football fixture ID (integer or string)
+
+    Returns:
+        Deterministic UUID based on the fixture ID
+
+    Example:
+        >>> fixture_id_to_uuid(1557375)
+        UUID('...')  # Same UUID every time for this ID
+    """
+    return uuid.uuid5(SIPAP_FIXTURE_NAMESPACE, str(fixture_id))
+
 
 class SoccerOrchestrator:
     """
@@ -981,6 +1004,10 @@ Focus on your specialized analysis approach based on your role.
         # Generate prediction ID
         prediction_id = uuid.uuid4()
 
+        # Convert API-Football fixture ID to UUID for database storage
+        # match_id can be an integer (API-Football ID) or string representation
+        match_uuid = fixture_id_to_uuid(match_id)
+
         try:
             with self.db.get_session() as session:
                 # Step 1: Insert into predictions table
@@ -998,7 +1025,7 @@ Focus on your specialized analysis approach based on your role.
                     ),
                     {
                         "id": str(prediction_id),
-                        "match_id": match_id,
+                        "match_id": str(match_uuid),
                         "user_id": None,  # TODO: Extract from context when user auth is implemented
                         "market": prediction.get("market", "1X2"),
                         "outcome": prediction.get("outcome"),
