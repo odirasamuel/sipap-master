@@ -1119,7 +1119,7 @@ Focus on your specialized analysis approach based on your role.
 
     def _extract_best_odds(self, odds_data: dict[str, Any]) -> dict[str, float]:
         """
-        Extract best odds from MCP odds response structure.
+        Extract best odds from MCP odds response structure for ALL markets.
 
         MCP returns odds in format:
         {
@@ -1127,18 +1127,24 @@ Focus on your specialized analysis approach based on your role.
             "count": 14,
             "odds": [
                 {"market": "1X2", "home_odds": 2.24, "draw_odds": 2.98, "away_odds": 3.45, ...},
+                {"market": "DNB", "home_odds": 1.80, "away_odds": 1.95, ...},
+                {"market": "DC", "1x_odds": 1.27, "12_odds": 1.42, "x2_odds": 1.12, ...},
+                {"market": "OU2.5", "over_odds": 1.47, "under_odds": 2.75, ...},
+                {"market": "BTTS", "yes_odds": 1.85, "no_odds": 1.95, ...},
                 ...
             ]
         }
 
-        This method extracts the best (highest) odds for each outcome type.
+        This method extracts the best (highest) odds for each outcome type across all markets.
 
         Returns:
             Dict mapping outcome names to best odds values:
             {
-                "home": 2.28,
-                "draw": 3.07,
-                "away": 3.71,
+                "home": 2.28, "draw": 3.07, "away": 3.71,  # 1X2
+                "home_dnb": 1.80, "away_dnb": 1.95,        # DNB
+                "1x": 1.27, "12": 1.42, "x2": 1.12,        # DC
+                "over_2.5": 1.47, "under_2.5": 2.75,       # OU2.5
+                "btts_yes": 1.85, "btts_no": 1.95,         # BTTS
             }
         """
         best_odds: dict[str, float] = {}
@@ -1148,54 +1154,146 @@ Focus on your specialized analysis approach based on your role.
         if not odds_list:
             return best_odds
 
-        # Extract best odds from all bookmakers
+        # Extract best odds from all bookmakers for all markets
         for bookmaker in odds_list:
-            # 1X2 market odds
-            home = bookmaker.get("home_odds", 0)
-            draw = bookmaker.get("draw_odds", 0)
-            away = bookmaker.get("away_odds", 0)
+            market = bookmaker.get("market", "").upper()
 
-            if home > best_odds.get("home", 0):
-                best_odds["home"] = home
-            if draw > best_odds.get("draw", 0):
-                best_odds["draw"] = draw
-            if away > best_odds.get("away", 0):
-                best_odds["away"] = away
+            # 1X2 market odds
+            home = bookmaker.get("home_odds", 0) or bookmaker.get("home", 0)
+            draw = bookmaker.get("draw_odds", 0) or bookmaker.get("draw", 0)
+            away = bookmaker.get("away_odds", 0) or bookmaker.get("away", 0)
+
+            if home and home > best_odds.get("home", 0):
+                best_odds["home"] = float(home)
+            if draw and draw > best_odds.get("draw", 0):
+                best_odds["draw"] = float(draw)
+            if away and away > best_odds.get("away", 0):
+                best_odds["away"] = float(away)
+
+            # DNB (Draw No Bet) market - use same home/away but store separately
+            if market == "DNB" or "draw no bet" in market.lower():
+                dnb_home = bookmaker.get("home_odds", 0) or bookmaker.get("home", 0)
+                dnb_away = bookmaker.get("away_odds", 0) or bookmaker.get("away", 0)
+                if dnb_home and dnb_home > best_odds.get("home_dnb", 0):
+                    best_odds["home_dnb"] = float(dnb_home)
+                if dnb_away and dnb_away > best_odds.get("away_dnb", 0):
+                    best_odds["away_dnb"] = float(dnb_away)
+
+            # Double Chance market
+            if market == "DC" or "double chance" in market.lower():
+                dc_1x = bookmaker.get("1x_odds", 0) or bookmaker.get("home_draw", 0) or bookmaker.get("1x", 0)
+                dc_12 = bookmaker.get("12_odds", 0) or bookmaker.get("home_away", 0) or bookmaker.get("12", 0)
+                dc_x2 = bookmaker.get("x2_odds", 0) or bookmaker.get("draw_away", 0) or bookmaker.get("x2", 0)
+                if dc_1x and dc_1x > best_odds.get("1x", 0):
+                    best_odds["1x"] = float(dc_1x)
+                if dc_12 and dc_12 > best_odds.get("12", 0):
+                    best_odds["12"] = float(dc_12)
+                if dc_x2 and dc_x2 > best_odds.get("x2", 0):
+                    best_odds["x2"] = float(dc_x2)
+
+            # Over/Under markets (handle various lines: 0.5, 1.5, 2.5, 3.5, 4.5)
+            if "over" in market.lower() or "under" in market.lower() or market.startswith("OU"):
+                over = bookmaker.get("over_odds", 0) or bookmaker.get("over", 0)
+                under = bookmaker.get("under_odds", 0) or bookmaker.get("under", 0)
+                # Extract line from market name (e.g., "OU2.5" -> "2.5")
+                line = ""
+                for part in market.replace("OU", "").replace("OVER", "").replace("UNDER", "").split():
+                    if part.replace(".", "").isdigit():
+                        line = part
+                        break
+                if not line:
+                    line = bookmaker.get("line", "2.5")
+                if over and over > best_odds.get(f"over_{line}", 0):
+                    best_odds[f"over_{line}"] = float(over)
+                if under and under > best_odds.get(f"under_{line}", 0):
+                    best_odds[f"under_{line}"] = float(under)
+
+            # BTTS market
+            if market == "BTTS" or "both teams" in market.lower():
+                yes = bookmaker.get("yes_odds", 0) or bookmaker.get("yes", 0)
+                no = bookmaker.get("no_odds", 0) or bookmaker.get("no", 0)
+                if yes and yes > best_odds.get("btts_yes", 0):
+                    best_odds["btts_yes"] = float(yes)
+                if no and no > best_odds.get("btts_no", 0):
+                    best_odds["btts_no"] = float(no)
 
         return best_odds
 
-    def _map_outcome_to_odds_key(self, outcome: str) -> str | None:
+    def _map_outcome_to_odds_key(self, outcome: str, market: str = "") -> str | None:
         """
-        Map prediction outcome to odds key.
+        Map prediction outcome to odds key based on market type.
 
         Args:
-            outcome: Prediction outcome (e.g., "Home Win", "Manchester City", "Yes")
+            outcome: Prediction outcome (e.g., "Home Win", "Manchester City", "Yes", "Over 2.5")
+            market: Market type (e.g., "1X2", "DNB", "DC", "OU2.5", "BTTS")
 
         Returns:
-            Odds key ("home", "draw", "away") or None if not mappable
+            Odds key for the specific market or None if not mappable
         """
         outcome_lower = outcome.lower().strip()
+        market_upper = market.upper()
 
+        # BTTS market
+        if market_upper == "BTTS" or "btts" in outcome_lower or "both teams" in outcome_lower:
+            if "yes" in outcome_lower:
+                return "btts_yes"
+            if "no" in outcome_lower:
+                return "btts_no"
+
+        # Over/Under market
+        if market_upper.startswith("OU") or "over" in outcome_lower or "under" in outcome_lower:
+            # Extract line from market (e.g., "OU2.5" -> "2.5") or outcome
+            line = ""
+            for text in [market_upper, outcome_lower]:
+                for part in text.replace("ou", "").replace("over", "").replace("under", "").split():
+                    clean = part.strip("()").replace(",", ".")
+                    if clean.replace(".", "").isdigit():
+                        line = clean
+                        break
+                if line:
+                    break
+            if not line:
+                line = "2.5"  # Default
+            if "over" in outcome_lower:
+                return f"over_{line}"
+            if "under" in outcome_lower:
+                return f"under_{line}"
+
+        # Double Chance market
+        if market_upper == "DC" or "double chance" in market_upper.lower():
+            if "1x" in outcome_lower or "home" in outcome_lower and "draw" in outcome_lower:
+                return "1x"
+            if "12" in outcome_lower or ("home" in outcome_lower and "away" in outcome_lower):
+                return "12"
+            if "x2" in outcome_lower or "draw" in outcome_lower and "away" in outcome_lower:
+                return "x2"
+            # Check for team-specific DC outcomes
+            if "home" in outcome_lower or "1" == outcome_lower.strip():
+                return "1x"  # Home or Draw
+            if "away" in outcome_lower or "2" == outcome_lower.strip():
+                return "x2"  # Away or Draw
+
+        # DNB (Draw No Bet) market
+        if market_upper == "DNB" or "draw no bet" in market_upper.lower() or "dnb" in outcome_lower:
+            if any(p in outcome_lower for p in ["home", "1"]):
+                return "home_dnb"
+            if any(p in outcome_lower for p in ["away", "2"]):
+                return "away_dnb"
+
+        # 1X2 market (default for win/draw/lose outcomes)
         # Home win patterns
-        if any(pattern in outcome_lower for pattern in [
-            "home win", "home", "1", "(1x)", "1x"
-        ]):
+        if any(pattern in outcome_lower for pattern in ["home win", "home", "1"]):
             return "home"
 
         # Draw patterns
-        if any(pattern in outcome_lower for pattern in [
-            "draw", "x", "tie"
-        ]):
+        if any(pattern in outcome_lower for pattern in ["draw", "tie"]) and "no bet" not in outcome_lower:
             return "draw"
 
         # Away win patterns
-        if any(pattern in outcome_lower for pattern in [
-            "away win", "away", "2", "(x2)", "x2"
-        ]):
+        if any(pattern in outcome_lower for pattern in ["away win", "away", "2"]):
             return "away"
 
         # If outcome contains team name, it's likely home team prediction
-        # (ensemble often returns team name as outcome)
         # Default to home for team-specific predictions
         return "home"
 
@@ -1232,6 +1330,7 @@ Focus on your specialized analysis approach based on your role.
         """
         outcome_raw = prediction.get("outcome")
         our_probability = prediction.get("probability", 0)
+        market = prediction.get("market", "")
 
         # Ensure outcome is a string
         if not isinstance(outcome_raw, str):
@@ -1249,8 +1348,8 @@ Focus on your specialized analysis approach based on your role.
         # Extract best odds from nested MCP structure
         best_odds = self._extract_best_odds(odds)
 
-        # Map outcome to odds key
-        odds_key = self._map_outcome_to_odds_key(outcome)
+        # Map outcome to odds key (pass market for market-specific mapping)
+        odds_key = self._map_outcome_to_odds_key(outcome, market)
 
         # Get odds for this outcome
         outcome_odds = best_odds.get(odds_key) if odds_key else None
