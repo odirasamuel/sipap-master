@@ -5,7 +5,7 @@
 
 ## Overview
 
-SIPAP's intelligent clarification system helps users when their requests are unclear or incomplete. Instead of returning generic error messages, the system analyzes what was understood and generates contextual, helpful responses that guide users toward what they need.
+Valo's intelligent clarification system helps users when their requests are unclear or incomplete. Instead of returning generic error messages, the system analyzes what was understood and generates contextual, helpful responses that guide users toward what they need.
 
 ## Features
 
@@ -27,7 +27,7 @@ The system automatically detects when clarification is needed:
 User: "Show me the prediction"
 Detected: intent=single_prediction, confidence=0.7, teams=None
 
-SIPAP Response:
+Valo Response:
 I'd be happy to show you a prediction! Which match are you interested in?
 
 1️⃣ Example format
@@ -42,7 +42,7 @@ I'd be happy to show you a prediction! Which match are you interested in?
 User: "Show me Arsenal matches"
 Detected: teams=["Arsenal"], intent=unknown, confidence=0.45
 
-SIPAP Response:
+Valo Response:
 I see you're asking about Arsenal matches. What would you like?
 
 1️⃣ 🎯 Prediction for best outcome
@@ -61,7 +61,7 @@ I see you're asking about Arsenal matches. What would you like?
 User: "Give me something good"
 Detected: intent=unknown, confidence=0.2, entities={}
 
-SIPAP Response:
+Valo Response:
 I'm here to help! Here's what I can do for you:
 
 1️⃣ 🎯 Get predictions (accumulated odds)
@@ -80,7 +80,7 @@ I'm here to help! Here's what I can do for you:
 User: "Give me 100 odds"
 Detected: intent=batch_prediction, confidence=0.7, target_odds=100 (too high)
 
-SIPAP Response:
+Valo Response:
 100 odds is quite ambitious! For better quality predictions, I recommend:
 
 1️⃣ 20-30 odds (highest quality)
@@ -97,10 +97,10 @@ The system preserves context for follow-up messages:
 
 ```
 User: "What's happening in Premier League?"
-SIPAP: [Disambiguates - saves context: {detected_league: "Premier League"}]
+Valo: [Disambiguates - saves context: {detected_league: "Premier League"}]
 
 User: "1" (selects predictions)
-SIPAP: [Uses saved context to interpret "1" as batch_prediction for Premier League]
+Valo: [Uses saved context to interpret "1" as batch_prediction for Premier League]
 ```
 
 ### 4. Special Handling
@@ -108,8 +108,8 @@ SIPAP: [Uses saved context to interpret "1" as batch_prediction for Premier Leag
 **Greetings:**
 ```
 User: "Hi"
-SIPAP Response:
-Hey! 👋 I'm SIPAP. I help you find smart betting opportunities. Try:
+Valo Response:
+Hey! 👋 I'm Valo. I help you find smart betting opportunities. Try:
 
 1️⃣ Get predictions
    Example: 'Give me 20 odds'

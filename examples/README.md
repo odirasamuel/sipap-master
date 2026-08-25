@@ -1,4 +1,4 @@
-# SIPAP-Master Examples
+# Valo-Master Examples
 
 Comprehensive working examples demonstrating the Phase 3 & 4 components: Intelligence Layer + Integration Layer.
 
@@ -241,7 +241,7 @@ python examples/01_basic_prediction.py
 
 ### Example 5: API Server (`02_api_server.py`)
 
-**Purpose:** Demonstrates running the SIPAP prediction API with FastAPI.
+**Purpose:** Demonstrates running the Valo prediction API with FastAPI.
 
 **Run:**
 

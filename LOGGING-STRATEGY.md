@@ -1,4 +1,4 @@
-# SIPAP Logging Strategy
+# Valo Logging Strategy
 
 **Version:** 1.0
 **Date:** 2026-08-13
@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-SIPAP implements a **3-tier conditional logging strategy** that reduces CloudWatch log costs by **99%** while preserving full debugging capability when needed.
+Valo implements a **3-tier conditional logging strategy** that reduces CloudWatch log costs by **99%** while preserving full debugging capability when needed.
 
 **Cost Impact:**
 - **Before:** 60,000 logs/batch, 12 MB/request, **$18-50/month**

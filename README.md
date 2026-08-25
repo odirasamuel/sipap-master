@@ -1,9 +1,9 @@
 # sipap-master
 
-**SIPAP Main Orchestrator** - AI-powered sports prediction with multi-agent coordination
+**Valo Main Orchestrator** - AI-powered sports prediction with multi-agent coordination
 
 **Company**: Ridha Tech
-**Product**: SIPAP (Sports Intelligence Platform and Outcome Probability Assessment Platform)
+**Product**: Valo (Sports Intelligence Platform and Outcome Probability Assessment Platform)
 **Phase**: 6A - WhatsApp Integration (In Progress)
 **Version**: 0.1.0
 **Status**: Production-ready MVP
@@ -12,13 +12,13 @@
 
 ## About Ridha Tech
 
-Ridha Tech is an AI solutions company specializing in intelligent automation and conversational AI platforms. SIPAP is our flagship product, delivering AI-powered sports intelligence through WhatsApp.
+Ridha Tech is an AI solutions company specializing in intelligent automation and conversational AI platforms. Valo is our flagship product, delivering AI-powered sports intelligence through WhatsApp.
 
 ---
 
 ## Overview
 
-sipap-master is the core orchestration layer for SIPAP (Sports Intelligence Platform and Outcome Probability Assessment Platform). It coordinates multiple AI agents and MCP servers to generate ensemble predictions for sports betting markets with expected value (+EV) analysis.
+sipap-master is the core orchestration layer for Valo (Sports Intelligence Platform and Outcome Probability Assessment Platform). It coordinates multiple AI agents and MCP servers to generate ensemble predictions for sports betting markets with expected value (+EV) analysis.
 
 This repository contains the main orchestrator, AI agents, daemon mode (SQS polling), and WhatsApp integration via Twilio.
 
@@ -232,4 +232,4 @@ MIT
 
 ## Contributing
 
-This is part of the SIPAP project. See main repository for contribution guidelines.
+This is part of the Valo project. See main repository for contribution guidelines.

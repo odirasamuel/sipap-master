@@ -1,10 +1,10 @@
-# SIPAP Orchestrator Docker Build Guide
+# Valo Orchestrator Docker Build Guide
 
-This directory contains Docker build infrastructure for the SIPAP AI Orchestrator, following Sentinel's proven multi-stage build patterns.
+This directory contains Docker build infrastructure for the Valo AI Orchestrator, following Sentinel's proven multi-stage build patterns.
 
 ## Overview
 
-The SIPAP Orchestrator is an AI-powered sports intelligence platform that coordinates multiple MCP (Model Context Protocol) servers to generate probability assessments and identify positive expected value (+EV) betting opportunities.
+The Valo Orchestrator is an AI-powered sports intelligence platform that coordinates multiple MCP (Model Context Protocol) servers to generate probability assessments and identify positive expected value (+EV) betting opportunities.
 
 **Architecture:**
 - **FastAPI HTTP API** - Prediction endpoints
@@ -73,7 +73,7 @@ git push origin main
 ```bash
 # Via GitHub Actions UI:
 # 1. Go to Actions tab in GitHub
-# 2. Select "Build and Push SIPAP Orchestrator to ECR"
+# 2. Select "Build and Push Valo Orchestrator to ECR"
 # 3. Click "Run workflow"
 # 4. Optional: specify custom tag (default: latest)
 ```
@@ -176,7 +176,7 @@ python docker/build-orchestrator.py --config-file /path/to/custom-config.json bu
   "aws_profile": "odiraaws",
   "build_platform": "linux/amd64",
   "python_version": "3.12",
-  "description": "SIPAP AI Orchestrator"
+  "description": "Valo AI Orchestrator"
 }
 ```
 
@@ -369,7 +369,7 @@ If > 500 MB, verify:
 ## References
 
 - **Sentinel Docker Patterns**: `/Users/charlesotuya/AI-Odi/sentinel/repos/sentinel-master/docker/`
-- **SIPAP Architecture**: `/Users/charlesotuya/AI-Odi/sentinel/sipap/technical-architecture-v2.md`
+- **Valo Architecture**: `/Users/charlesotuya/AI-Odi/sentinel/sipap/technical-architecture-v2.md`
 - **AWS ECR Documentation**: https://docs.aws.amazon.com/ecr/
 - **Docker Multi-Stage Builds**: https://docs.docker.com/build/building/multi-stage/
 
