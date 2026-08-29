@@ -48,6 +48,18 @@ MARKET_GUIDANCE_MESSAGE = """Please specify which markets you want predictions f
 
 What markets would you like?"""
 
+# Patterns for recognizing subscription cancellation requests
+CANCEL_SUBSCRIPTION_PATTERNS = [
+    r"cancel\s*(my)?\s*subscription",
+    r"stop\s*(my)?\s*subscription",
+    r"unsubscribe",
+    r"cancel\s*(my)?\s*plan",
+    r"end\s*(my)?\s*subscription",
+    r"terminate\s*(my)?\s*subscription",
+    r"don'?t\s*renew",
+    r"stop\s*charging",
+]
+
 
 class LeagueEntity(BaseModel):
     """Structured league entity with API-Football ID for unambiguous resolution.
@@ -112,6 +124,7 @@ class RequestIntent(BaseModel):
         "explain",  # User wants explanation of a prediction
         "show_fixtures",  # User wants to see available fixtures (no predictions)
         "check_odds",  # User wants to check odds
+        "cancel_subscription",  # User wants to cancel their subscription
         "unknown",  # Cannot determine intent
     ]
     confidence: float = Field(ge=0.0, le=1.0)  # Confidence score 0.0-1.0
@@ -139,6 +152,9 @@ class RequestIntent(BaseModel):
     # Guidance for incomplete batch prediction requests
     needs_market_specification: bool = False  # True when user must specify markets
     guidance_message: str | None = None  # Message to send when request needs clarification
+
+    # Subscription-based date validation
+    needs_date_adjustment: bool = False  # True when requested date exceeds subscription period
 
     model_config = ConfigDict(frozen=False)  # Allow modifications for context resolution
 
@@ -221,6 +237,15 @@ class NLUAgent:
         conversation_context = conversation_context or {}
 
         self.logger.debug(f"Parsing user message: {message[:50]}...")
+
+        # Check for subscription cancellation FIRST (before Claude NLU)
+        if self._is_cancellation_request(message):
+            self.logger.info("Detected subscription cancellation request")
+            return RequestIntent(
+                intent_type="cancel_subscription",
+                confidence=1.0,
+                original_query=message,
+            )
 
         # Primary: Claude-based NLU
         try:
@@ -406,6 +431,27 @@ class NLUAgent:
             f"Batch prediction has valid market specification: {intent.markets}"
         )
         return intent
+
+    def _is_cancellation_request(self, message: str) -> bool:
+        """Check if message is a subscription cancellation request.
+
+        Args:
+            message: User message to check
+
+        Returns:
+            True if the message matches cancellation patterns
+
+        Example:
+            >>> nlu._is_cancellation_request("cancel my subscription")
+            True
+            >>> nlu._is_cancellation_request("give me btts predictions")
+            False
+        """
+        message_lower = message.lower().strip()
+        for pattern in CANCEL_SUBSCRIPTION_PATTERNS:
+            if re.search(pattern, message_lower):
+                return True
+        return False
 
     async def generate_clarification(
         self,

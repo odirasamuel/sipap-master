@@ -15,6 +15,7 @@ from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
 
 from sipap.core.orchestrator import MainOrchestrator
+from sipap.api.subscription import router as subscription_router
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -22,6 +23,9 @@ app = FastAPI(
     description="Sports Intelligence Platform and Outcome Probability Assessment",
     version="0.1.0",
 )
+
+# Register routers
+app.include_router(subscription_router, prefix="/api")
 
 # Initialize logger
 logger = logging.getLogger(__name__)

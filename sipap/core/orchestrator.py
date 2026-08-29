@@ -704,6 +704,39 @@ class MainOrchestrator:
             self.conversation_manager.add_assistant_message(user_id, response["message"])
             return response
 
+        # Step 3.7: Handle subscription cancellation
+        if intent.intent_type == "cancel_subscription":
+            self.logger.info(
+                "Processing subscription cancellation request",
+                extra={"user_id": user_id},
+            )
+            result = await self._handle_cancellation(user_id)
+            self.conversation_manager.add_assistant_message(user_id, result["message"])
+            return result
+
+        # Step 3.8: Validate date range against subscription (for prediction intents)
+        if intent.intent_type in ("single_prediction", "batch_prediction"):
+            date_validation = await self._validate_date_against_subscription(intent, user_id)
+            if not date_validation["is_valid"]:
+                self.logger.info(
+                    "Date range exceeds subscription period",
+                    extra={
+                        "user_id": user_id,
+                        "requested_date": str(intent.date_range),
+                    },
+                )
+                response = {
+                    "message": date_validation["guidance_message"],
+                    "intent": "subscription_date_exceeded",
+                    "data": {
+                        "original_intent": intent.intent_type,
+                        "requested_date_range": intent.date_range,
+                    },
+                    "error": None,
+                }
+                self.conversation_manager.add_assistant_message(user_id, response["message"])
+                return response
+
         # Step 4: Route based on intent_type
         if intent.intent_type == "batch_prediction":
             # Phase 2B: Batch prediction with accumulated odds (not yet implemented)
@@ -830,6 +863,103 @@ class MainOrchestrator:
                     lines.append(f"{emoji} {label}")
 
         return "\n".join(lines)
+
+    async def _handle_cancellation(self, user_id: str) -> dict[str, Any]:
+        """Handle subscription cancellation request.
+
+        Args:
+            user_id: User identifier
+
+        Returns:
+            Response dictionary with cancellation status and message
+        """
+        from sipap.services.subscription import SubscriptionService
+
+        try:
+            service = SubscriptionService()
+            result = await service.cancel_subscription(user_id)
+
+            if result.get("success"):
+                return {
+                    "message": result.get("message", "Your subscription has been cancelled."),
+                    "intent": "cancel_subscription",
+                    "data": {
+                        "success": True,
+                        "expires_at": str(result.get("expires_at")) if result.get("expires_at") else None,
+                    },
+                    "error": None,
+                }
+            else:
+                return {
+                    "message": result.get("error", "Unable to cancel subscription."),
+                    "intent": "cancel_subscription",
+                    "data": {"success": False},
+                    "error": result.get("error"),
+                }
+
+        except Exception as e:
+            self.logger.error(f"Error handling cancellation for {user_id}: {e}", exc_info=True)
+            return {
+                "message": "An error occurred while processing your cancellation. Please try again later.",
+                "intent": "cancel_subscription",
+                "data": None,
+                "error": str(e),
+            }
+
+    async def _validate_date_against_subscription(
+        self,
+        intent: RequestIntent,
+        user_id: str,
+    ) -> dict[str, Any]:
+        """Validate if requested date range is within user's subscription period.
+
+        Args:
+            intent: Parsed intent with date_range
+            user_id: User identifier
+
+        Returns:
+            Dictionary with validation result:
+            - is_valid: True if date range is within subscription
+            - guidance_message: Message if validation failed
+        """
+        from datetime import datetime, UTC
+        from sipap.services.subscription import SubscriptionService
+
+        try:
+            service = SubscriptionService()
+
+            # Determine the requested end date
+            if intent.date_range:
+                # Parse end date from date_range
+                end_date_str = intent.date_range.get("end") or intent.date_range.get("start")
+                if end_date_str:
+                    # Parse date string (format: YYYY-MM-DD)
+                    try:
+                        requested_end = datetime.strptime(end_date_str, "%Y-%m-%d").replace(tzinfo=UTC)
+                    except ValueError:
+                        # If parsing fails, assume today
+                        requested_end = datetime.now(UTC)
+                else:
+                    requested_end = datetime.now(UTC)
+            else:
+                # No date range specified - default to today (always valid)
+                requested_end = datetime.now(UTC)
+
+            # Validate date range against subscription
+            is_valid, guidance_message = await service.validate_date_range(user_id, requested_end)
+
+            return {
+                "is_valid": is_valid,
+                "guidance_message": guidance_message,
+            }
+
+        except Exception as e:
+            self.logger.error(f"Error validating date range for {user_id}: {e}", exc_info=True)
+            # On error, allow the request to proceed (fail open)
+            return {
+                "is_valid": True,
+                "guidance_message": None,
+            }
 
     async def _handle_batch_prediction(
         self,

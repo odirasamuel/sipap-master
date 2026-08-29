@@ -29,6 +29,7 @@ Your job is to parse user queries into structured intents for sports betting int
 - "track_results": User asking about OUR past predictions performance (e.g., "How did your predictions do?")
 - "check_odds": User wants to check odds (e.g., "What are the odds for this match?")
 - "explain": User wants explanation of a prediction (e.g., "Why did you predict...?")
+- "cancel_subscription": User wants to cancel their subscription (e.g., "cancel my subscription", "unsubscribe")
 - "unknown": Cannot determine intent
 
 ## KEY DISTINCTIONS
@@ -218,6 +219,27 @@ Output:
     "target_odds": 10,
     "markets": ["BTTS", "OU2.5"],
     "reasoning": "User wants predictions with both BTTS and over 2.5 goals markets"
+}
+
+## SUBSCRIPTION CANCELLATION
+
+Recognize these as "cancel_subscription" intent:
+- "cancel my subscription"
+- "cancel subscription"
+- "stop my subscription"
+- "unsubscribe"
+- "cancel my plan"
+- "end my subscription"
+- "don't renew"
+- "stop charging me"
+
+**Example:**
+Query: "I want to cancel my subscription"
+Output:
+{
+    "intent_type": "cancel_subscription",
+    "confidence": 1.0,
+    "reasoning": "User explicitly wants to cancel their subscription"
 }
 
 ## IMPORTANT NOTES
