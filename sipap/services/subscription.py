@@ -195,16 +195,17 @@ class SubscriptionService:
             DatabaseError: On database query failure
         """
         if not self.db:
-            # Development mode: return mock trial user (trial NOT used)
-            logger.debug(f"No database - returning mock trial for user {user_id}")
+            # Development mode: return mock active user for local testing
+            # In production, users must be registered via payment
+            logger.debug(f"No database - returning mock active subscription for user {user_id}")
             return SubscriptionInfo(
                 user_id=user_id,
                 phone_number=user_id if user_id.startswith("+") else None,
-                subscription_status="trial",
-                subscription_tier=None,
-                subscription_expires_at=None,
-                max_prediction_date=datetime.now(UTC),  # Today only for trial
-                trial_used_at=None,  # Trial not used yet
+                subscription_status="active",  # Allow testing in dev mode
+                subscription_tier="weekly",
+                subscription_expires_at=datetime.now(UTC).replace(hour=23, minute=59, second=59),
+                max_prediction_date=datetime.now(UTC).replace(hour=23, minute=59, second=59),
+                trial_used_at=None,
             )
 
         try:
@@ -226,15 +227,15 @@ class SubscriptionService:
             results = self.db.execute_raw_sql(sql, params)
 
             if not results:
-                # New user - treat as trial (not used yet)
-                logger.info(f"User {user_id} not found in database - treating as trial")
+                # User not found - no subscription (must register via payment)
+                logger.info(f"User {user_id} not found in database - no subscription")
                 return SubscriptionInfo(
                     user_id=user_id,
                     phone_number=user_id if user_id.startswith("+") else None,
-                    subscription_status="trial",
+                    subscription_status="none",  # Not registered
                     subscription_tier=None,
                     subscription_expires_at=None,
-                    max_prediction_date=datetime.now(UTC),
+                    max_prediction_date=None,  # No access
                     trial_used_at=None,
                 )
 
@@ -322,6 +323,11 @@ class SubscriptionService:
         """
         info = await self.get_subscription_info(user_id)
         now = datetime.now(UTC)
+
+        # Unregistered users: must subscribe first
+        if info["subscription_status"] == "none":
+            logger.info(f"Unregistered user {user_id} blocked: no subscription")
+            return (False, NO_SUBSCRIPTION_GUIDANCE)
 
         # Trial users: ONE free request only
         if info["subscription_status"] == "trial":
@@ -413,9 +419,10 @@ class SubscriptionService:
         """Mark trial as used for a user.
 
         Called after a trial user successfully receives their first prediction.
+        User must already exist in database (created via payment).
 
         Args:
-            user_id: The user's ID
+            user_id: The user's ID (phone number or UUID)
 
         Returns:
             True if successfully marked, False otherwise

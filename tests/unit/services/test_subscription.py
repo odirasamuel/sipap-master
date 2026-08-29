@@ -73,16 +73,15 @@ class TestGetSubscriptionInfo:
         return SubscriptionService(db=None)
 
     @pytest.mark.asyncio
-    async def test_returns_trial_for_new_user_without_db(self, service):
-        """Without database, all users are treated as trial (not used)."""
+    async def test_returns_active_for_dev_mode_without_db(self, service):
+        """Without database (dev mode), users get mock active subscription for testing."""
         info = await service.get_subscription_info("user_123")
 
         assert info["user_id"] == "user_123"
-        assert info["subscription_status"] == "trial"
-        assert info["subscription_tier"] is None
-        assert info["subscription_expires_at"] is None
-        assert info["trial_used_at"] is None  # Trial not used yet
-        # Trial users can only access today
+        assert info["subscription_status"] == "active"  # Dev mode allows testing
+        assert info["subscription_tier"] == "weekly"
+        assert info["subscription_expires_at"] is not None
+        # Active users can access until end of day
         assert info["max_prediction_date"].date() == datetime.now(UTC).date()
 
     @pytest.mark.asyncio
@@ -290,8 +289,8 @@ class TestMarkTrialUsed:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_mark_trial_success(self):
-        """Marking trial as used succeeds with database."""
+    async def test_mark_trial_success_phone_number(self):
+        """Marking trial as used succeeds for phone number users."""
         mock_db = MagicMock()
         # RETURNING clause returns the updated row's id
         mock_db.execute_raw_sql.return_value = [("user-uuid-123",)]
@@ -300,15 +299,35 @@ class TestMarkTrialUsed:
         result = await service.mark_trial_used("+2348012345678")
 
         assert result is True
-        # Verify update was called
+        # Verify UPDATE was called with phone_number WHERE clause
         assert mock_db.execute_raw_sql.called
         call_args = mock_db.execute_raw_sql.call_args
+        assert "UPDATE users" in call_args[0][0]
+        assert "phone_number = :user_id" in call_args[0][0]
         assert "trial_used_at" in call_args[0][0]
         assert "RETURNING id" in call_args[0][0]
 
     @pytest.mark.asyncio
-    async def test_mark_trial_no_user_found(self):
-        """Marking trial returns False when user not found."""
+    async def test_mark_trial_success_uuid(self):
+        """Marking trial as used succeeds for UUID users."""
+        mock_db = MagicMock()
+        mock_db.execute_raw_sql.return_value = [("user-uuid-123",)]
+
+        service = SubscriptionService(db=mock_db)
+        # UUID format (not starting with +)
+        result = await service.mark_trial_used("550e8400-e29b-41d4-a716-446655440000")
+
+        assert result is True
+        # Verify UPDATE was called with id WHERE clause
+        assert mock_db.execute_raw_sql.called
+        call_args = mock_db.execute_raw_sql.call_args
+        assert "UPDATE users" in call_args[0][0]
+        assert "id = :user_id" in call_args[0][0]
+        assert "RETURNING id" in call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_mark_trial_user_not_found(self):
+        """Marking trial returns False when user not found in database."""
         mock_db = MagicMock()
         mock_db.execute_raw_sql.return_value = []  # No rows updated
 
@@ -337,10 +356,16 @@ class TestValidateDateRange:
         assert guidance is None
 
     @pytest.mark.asyncio
-    async def test_trial_user_tomorrow_blocked(self, service):
+    async def test_trial_user_tomorrow_blocked(self):
         """Trial users cannot request tomorrow's matches."""
-        tomorrow = datetime.now(UTC) + timedelta(days=1)
+        # Mock database to return a trial user
+        mock_db = MagicMock()
+        mock_db.execute_raw_sql.return_value = [
+            ("user-uuid-123", "+2348012345678", "trial", None, None, None)
+        ]
+        service = SubscriptionService(db=mock_db)
 
+        tomorrow = datetime.now(UTC) + timedelta(days=1)
         is_valid, guidance = await service.validate_date_range("user_123", tomorrow)
 
         assert is_valid is False
