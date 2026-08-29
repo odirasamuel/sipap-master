@@ -714,6 +714,16 @@ class MainOrchestrator:
             self.conversation_manager.add_assistant_message(user_id, result["message"])
             return result
 
+        # Step 3.7.1: Handle subscribe request
+        if intent.intent_type == "subscribe":
+            self.logger.info(
+                "Processing subscribe request",
+                extra={"user_id": user_id},
+            )
+            result = await self._handle_subscribe_request(user_id)
+            self.conversation_manager.add_assistant_message(user_id, result["message"])
+            return result
+
         # Step 3.8: Validate subscription access (for prediction intents)
         # This checks: subscription status, trial usage (ONE free request), and explicit date ranges
         is_trial_user = False
@@ -916,6 +926,88 @@ class MainOrchestrator:
             return {
                 "message": "An error occurred while processing your cancellation. Please try again later.",
                 "intent": "cancel_subscription",
+                "data": None,
+                "error": str(e),
+            }
+
+    async def _handle_subscribe_request(self, user_id: str) -> dict[str, Any]:
+        """Handle user's request to subscribe.
+
+        Generates appropriate link based on whether user exists:
+        - NEW user -> https://ridhatech.com/signup
+        - EXISTING user -> https://ridhatech.com/subscribe/
+
+        Also shows localized pricing based on user's country (from phone number).
+
+        Args:
+            user_id: User identifier (phone number)
+
+        Returns:
+            Response dictionary with subscribe message and payment link
+        """
+        from sipap.services.subscription import (
+            SubscriptionService,
+            get_localized_pricing,
+            get_payment_link,
+            _format_price,
+        )
+
+        try:
+            service = SubscriptionService()
+
+            # Check if user exists in database
+            user_exists = await service.check_user_exists(user_id)
+
+            # Get localized pricing
+            pricing = await get_localized_pricing(user_id)
+
+            # Get appropriate payment link
+            payment_link = get_payment_link(user_exists)
+
+            currency = pricing["currency"]
+            symbol = pricing["symbol"]
+
+            # Format prices
+            p1 = _format_price(pricing["1_week"], currency, symbol)
+            p2 = _format_price(pricing["2_weeks"], currency, symbol)
+            p3 = _format_price(pricing["3_weeks"], currency, symbol)
+
+            # Set action text based on user status
+            if user_exists:
+                action_text = "Renew your subscription"
+            else:
+                action_text = "Create your account"
+
+            message = f"""Great! Here are our subscription plans:
+
+*Weekly Plans*
+- 1 Week: {p1}
+- 2 Weeks: {p2}
+- 3 Weeks: {p3}
+
+*What you get:*
+- Unlimited predictions for your subscription period
+- All markets: BTTS, Over/Under, 1X2, Double Chance, DNB
+- All major leagues worldwide
+
+*{action_text}:* {payment_link}"""
+
+            return {
+                "message": message,
+                "intent": "subscribe",
+                "data": {
+                    "payment_link": payment_link,
+                    "pricing": pricing,
+                    "is_new_user": not user_exists,
+                },
+                "error": None,
+            }
+
+        except Exception as e:
+            self.logger.error(f"Error handling subscribe request for {user_id}: {e}", exc_info=True)
+            return {
+                "message": "An error occurred. Please visit https://ridhatech.com to subscribe.",
+                "intent": "subscribe",
                 "data": None,
                 "error": str(e),
             }

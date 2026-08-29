@@ -10,6 +10,7 @@ Key Features:
 - Multi-week support: 2/3/4 weeks get full period access
 - Cancellation: retains access until expires_at
 - Date validation: blocks explicit future dates past subscription
+- Localized pricing: realtime exchange rates based on user's country
 """
 
 import os
@@ -20,35 +21,218 @@ from sipap_common.database.manager import DatabaseManager
 from sipap_common.exceptions import DatabaseError
 from sipap_common.logging import get_logger
 
+from sipap.services.exchange_rate import get_exchange_rate
+
 
 logger = get_logger(__name__)
 
 
-# Guidance messages for different subscription states
-TRIAL_DATE_GUIDANCE = """You're on the free trial, which allows ONE free prediction request.
+# =============================================================================
+# Localization: Country codes, currencies, and payment URLs
+# =============================================================================
 
-You've already used your free trial. To continue accessing predictions, subscribe to our weekly plan:
-- 1 Week: $2 (7 days of predictions)
-- 2 Weeks: $3.50 (14 days)
-- 3 Weeks: $5 (21 days)
+# Country calling codes to currency mapping
+COUNTRY_PHONE_CODES: dict[str, tuple[str, str, str]] = {
+    # code: (country, currency_code, currency_symbol)
+    "234": ("Nigeria", "NGN", "\u20a6"),       # Naira
+    "1": ("USA", "USD", "$"),
+    "44": ("UK", "GBP", "\u00a3"),             # Pound
+    "27": ("South Africa", "ZAR", "R"),
+    "254": ("Kenya", "KES", "KSh"),
+    "233": ("Ghana", "GHS", "\u20b5"),         # Cedi
+    "256": ("Uganda", "UGX", "USh"),
+    "255": ("Tanzania", "TZS", "TSh"),
+    "237": ("Cameroon", "XAF", "FCFA"),
+}
 
-Reply "subscribe" to get started!"""
+# Base pricing in USD (source of truth)
+BASE_PRICING_USD: dict[str, float] = {
+    "1_week": 2.00,
+    "2_weeks": 3.50,
+    "3_weeks": 5.00,
+}
 
-TRIAL_USED_GUIDANCE = """You've already used your free trial prediction.
+# Currencies with no decimal places (large value currencies)
+NO_DECIMAL_CURRENCIES = {"NGN", "KES", "ZAR", "UGX", "TZS", "XAF"}
 
-To continue accessing predictions, subscribe to our weekly plan:
-- 1 Week: $2 (7 days of unlimited predictions)
-- 2 Weeks: $3.50 (14 days)
-- 3 Weeks: $5 (21 days)
+# Payment URLs
+SIGNUP_URL = "https://ridhatech.com/signup"        # For NEW users
+SUBSCRIBE_URL = "https://ridhatech.com/subscribe/"  # For EXISTING users
 
-Reply "subscribe" to get started!"""
 
-NO_SUBSCRIPTION_GUIDANCE = """You need an active subscription to access predictions.
+def get_currency_from_phone(phone_number: str) -> tuple[str, str, str]:
+    """Extract currency info from E.164 phone number.
+
+    Determines the user's country and currency based on their phone number's
+    country calling code.
+
+    Args:
+        phone_number: E.164 format (e.g., "+2347025761599")
+
+    Returns:
+        Tuple of (country, currency_code, currency_symbol)
+        Defaults to USA/USD if not found.
+
+    Example:
+        >>> get_currency_from_phone("+2347025761599")
+        ('Nigeria', 'NGN', '\u20a6')
+        >>> get_currency_from_phone("+14155551234")
+        ('USA', 'USD', '$')
+    """
+    if not phone_number or not phone_number.startswith("+"):
+        return ("USA", "USD", "$")
+
+    number = phone_number[1:]  # Remove + prefix
+
+    # Try matching longest codes first (e.g., "234" before "23")
+    for code_len in [4, 3, 2, 1]:
+        code = number[:code_len]
+        if code in COUNTRY_PHONE_CODES:
+            return COUNTRY_PHONE_CODES[code]
+
+    return ("USA", "USD", "$")  # Default fallback
+
+
+async def get_localized_pricing(phone_number: str) -> dict:
+    """Get pricing in user's local currency using realtime exchange rates.
+
+    Converts the base USD pricing to the user's local currency based on
+    their phone number's country code.
+
+    Args:
+        phone_number: E.164 format phone number
+
+    Returns:
+        Dict with country, currency, symbol, exchange_rate, and prices
+
+    Example:
+        >>> pricing = await get_localized_pricing("+2347025761599")
+        >>> print(f"1 week: {pricing['symbol']}{pricing['1_week']:,.0f}")
+        1 week: \u20a63,200
+    """
+    country, currency, symbol = get_currency_from_phone(phone_number)
+
+    # Get realtime exchange rate
+    rate = await get_exchange_rate(currency)
+
+    return {
+        "country": country,
+        "currency": currency,
+        "symbol": symbol,
+        "exchange_rate": rate,
+        "1_week": round(BASE_PRICING_USD["1_week"] * rate, 2),
+        "2_weeks": round(BASE_PRICING_USD["2_weeks"] * rate, 2),
+        "3_weeks": round(BASE_PRICING_USD["3_weeks"] * rate, 2),
+    }
+
+
+def _format_price(amount: float, currency: str, symbol: str) -> str:
+    """Format price with appropriate decimal places.
+
+    Args:
+        amount: Price amount
+        currency: Currency code (e.g., "NGN", "USD")
+        symbol: Currency symbol (e.g., "\u20a6", "$")
+
+    Returns:
+        Formatted price string
+    """
+    if currency in NO_DECIMAL_CURRENCIES:
+        return f"{symbol}{amount:,.0f}"
+    return f"{symbol}{amount:,.2f}"
+
+
+async def format_subscription_guidance(phone_number: str) -> str:
+    """Format subscription guidance with localized pricing.
+
+    Args:
+        phone_number: User's phone number (E.164 format)
+
+    Returns:
+        Localized subscription guidance message
+    """
+    pricing = await get_localized_pricing(phone_number)
+    currency = pricing["currency"]
+    symbol = pricing["symbol"]
+
+    p1 = _format_price(pricing["1_week"], currency, symbol)
+    p2 = _format_price(pricing["2_weeks"], currency, symbol)
+    p3 = _format_price(pricing["3_weeks"], currency, symbol)
+
+    return f"""You need an active subscription to access predictions.
 
 Subscribe to our weekly plan:
-- 1 Week: $2 (7 days of unlimited predictions)
-- 2 Weeks: $3.50 (14 days)
-- 3 Weeks: $5 (21 days)
+- 1 Week: {p1} (7 days of unlimited predictions)
+- 2 Weeks: {p2} (14 days)
+- 3 Weeks: {p3} (21 days)
+
+Reply "subscribe" to get started!"""
+
+
+async def format_trial_used_guidance(phone_number: str) -> str:
+    """Format trial-used guidance with localized pricing.
+
+    Args:
+        phone_number: User's phone number (E.164 format)
+
+    Returns:
+        Localized trial-used guidance message
+    """
+    pricing = await get_localized_pricing(phone_number)
+    currency = pricing["currency"]
+    symbol = pricing["symbol"]
+
+    p1 = _format_price(pricing["1_week"], currency, symbol)
+    p2 = _format_price(pricing["2_weeks"], currency, symbol)
+    p3 = _format_price(pricing["3_weeks"], currency, symbol)
+
+    return f"""You've already used your free trial prediction.
+
+To continue accessing predictions, subscribe to our weekly plan:
+- 1 Week: {p1} (7 days of unlimited predictions)
+- 2 Weeks: {p2} (14 days)
+- 3 Weeks: {p3} (21 days)
+
+Reply "subscribe" to get started!"""
+
+
+def get_payment_link(user_exists: bool) -> str:
+    """Get appropriate payment link based on user status.
+
+    Args:
+        user_exists: Whether user exists in database
+
+    Returns:
+        Payment URL:
+        - New users -> https://ridhatech.com/signup
+        - Existing users -> https://ridhatech.com/subscribe/
+    """
+    if user_exists:
+        return SUBSCRIBE_URL
+    return SIGNUP_URL
+
+
+# =============================================================================
+# Guidance messages (static versions - used as fallbacks)
+# Prefer using async format_*_guidance functions for localized pricing
+# =============================================================================
+
+# DEPRECATED: Use format_trial_used_guidance(phone) instead
+TRIAL_DATE_GUIDANCE = """You're on the free trial, which allows ONE free prediction request.
+
+You've already used your free trial. To continue accessing predictions, subscribe to our weekly plan.
+
+Reply "subscribe" to get started!"""
+
+# DEPRECATED: Use format_trial_used_guidance(phone) instead
+TRIAL_USED_GUIDANCE = """You've already used your free trial prediction.
+
+To continue accessing predictions, subscribe to our weekly plan.
+
+Reply "subscribe" to get started!"""
+
+# DEPRECATED: Use format_subscription_guidance(phone) instead
+NO_SUBSCRIPTION_GUIDANCE = """You need an active subscription to access predictions.
 
 Reply "subscribe" to get started!"""
 
@@ -307,34 +491,41 @@ class SubscriptionService:
         2. Trial usage (trial users get ONE free request only)
         3. Date range (if explicitly requesting future dates)
 
+        Returns localized pricing based on user's phone number country code.
+
         Args:
-            user_id: The user's ID
+            user_id: The user's ID (phone number or UUID)
             requested_end: Optional end date (for explicit future date validation)
 
         Returns:
             Tuple of (is_valid, guidance_message)
             - (True, None) if user can access predictions
-            - (False, "guidance message") if access denied
+            - (False, "guidance message") if access denied (with localized pricing)
 
         Example:
-            >>> is_valid, msg = await service.validate_access("user_123")
+            >>> is_valid, msg = await service.validate_access("+2347025761599")
             >>> if not is_valid:
             ...     return {"message": msg, "intent": "subscription_required"}
         """
         info = await self.get_subscription_info(user_id)
         now = datetime.now(UTC)
 
+        # Use phone number for localization (user_id is phone number for WhatsApp users)
+        phone = user_id if user_id.startswith("+") else info.get("phone_number") or user_id
+
         # Unregistered users: must subscribe first
         if info["subscription_status"] == "none":
             logger.info(f"Unregistered user {user_id} blocked: no subscription")
-            return (False, NO_SUBSCRIPTION_GUIDANCE)
+            guidance = await format_subscription_guidance(phone)
+            return (False, guidance)
 
         # Trial users: ONE free request only
         if info["subscription_status"] == "trial":
             if info["trial_used_at"] is not None:
                 # Trial already used
                 logger.info(f"Trial user {user_id} blocked: trial already used at {info['trial_used_at']}")
-                return (False, TRIAL_USED_GUIDANCE)
+                guidance = await format_trial_used_guidance(phone)
+                return (False, guidance)
             # Trial not used yet - allow (will be marked as used after prediction)
             logger.info(f"Trial user {user_id} allowed: first free prediction")
             return (True, None)
@@ -376,7 +567,8 @@ class SubscriptionService:
 
         # Unknown status - block with guidance
         logger.warning(f"Unknown subscription status for user {user_id}: {info['subscription_status']}")
-        return (False, NO_SUBSCRIPTION_GUIDANCE)
+        guidance = await format_subscription_guidance(phone)
+        return (False, guidance)
 
     async def _validate_explicit_date(
         self,
@@ -632,3 +824,17 @@ class SubscriptionService:
                 "success": False,
                 "error": "An unexpected error occurred. Please contact support.",
             }
+
+    async def check_user_exists(self, user_id: str) -> bool:
+        """Check if user exists in database.
+
+        Used to determine whether to show signup or subscribe link.
+
+        Args:
+            user_id: Phone number or UUID
+
+        Returns:
+            True if user exists, False otherwise
+        """
+        info = await self.get_subscription_info(user_id)
+        return info["subscription_status"] != "none"

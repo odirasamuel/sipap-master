@@ -171,7 +171,9 @@ class TestValidateAccess:
         is_valid, guidance = await service.validate_access("+2348012345678")
 
         assert is_valid is False
-        assert guidance == TRIAL_USED_GUIDANCE
+        # Guidance is now localized, check for key content instead of exact match
+        assert "trial" in guidance.lower() or "used" in guidance.lower()
+        assert "subscribe" in guidance.lower()
 
     @pytest.mark.asyncio
     async def test_active_user_allowed(self):
@@ -608,3 +610,276 @@ class TestCancellationTokens:
         assert "sipap.io" in link
         assert f"user_id={user_id}" in link
         assert "token=" in link
+
+
+# =============================================================================
+# Localization Tests
+# =============================================================================
+
+
+class TestGetCurrencyFromPhone:
+    """Tests for get_currency_from_phone function."""
+
+    def test_nigeria_phone(self):
+        """Nigerian phone numbers return NGN."""
+        from sipap.services.subscription import get_currency_from_phone
+
+        country, currency, symbol = get_currency_from_phone("+2347025761599")
+        assert country == "Nigeria"
+        assert currency == "NGN"
+        assert symbol == "\u20a6"  # Naira symbol
+
+    def test_usa_phone(self):
+        """US phone numbers return USD."""
+        from sipap.services.subscription import get_currency_from_phone
+
+        country, currency, symbol = get_currency_from_phone("+14155551234")
+        assert country == "USA"
+        assert currency == "USD"
+        assert symbol == "$"
+
+    def test_uk_phone(self):
+        """UK phone numbers return GBP."""
+        from sipap.services.subscription import get_currency_from_phone
+
+        country, currency, symbol = get_currency_from_phone("+447911123456")
+        assert country == "UK"
+        assert currency == "GBP"
+        assert symbol == "\u00a3"  # Pound symbol
+
+    def test_south_africa_phone(self):
+        """South African phone numbers return ZAR."""
+        from sipap.services.subscription import get_currency_from_phone
+
+        country, currency, symbol = get_currency_from_phone("+27821234567")
+        assert country == "South Africa"
+        assert currency == "ZAR"
+        assert symbol == "R"
+
+    def test_kenya_phone(self):
+        """Kenyan phone numbers return KES."""
+        from sipap.services.subscription import get_currency_from_phone
+
+        country, currency, symbol = get_currency_from_phone("+254712345678")
+        assert country == "Kenya"
+        assert currency == "KES"
+        assert symbol == "KSh"
+
+    def test_ghana_phone(self):
+        """Ghanaian phone numbers return GHS."""
+        from sipap.services.subscription import get_currency_from_phone
+
+        country, currency, symbol = get_currency_from_phone("+233241234567")
+        assert country == "Ghana"
+        assert currency == "GHS"
+        assert symbol == "\u20b5"  # Cedi symbol
+
+    def test_unknown_country_defaults_to_usd(self):
+        """Unknown country codes default to USD."""
+        from sipap.services.subscription import get_currency_from_phone
+
+        country, currency, symbol = get_currency_from_phone("+999123456789")
+        assert country == "USA"
+        assert currency == "USD"
+        assert symbol == "$"
+
+    def test_empty_phone_defaults_to_usd(self):
+        """Empty phone number defaults to USD."""
+        from sipap.services.subscription import get_currency_from_phone
+
+        country, currency, symbol = get_currency_from_phone("")
+        assert country == "USA"
+        assert currency == "USD"
+        assert symbol == "$"
+
+    def test_phone_without_plus_defaults_to_usd(self):
+        """Phone number without + prefix defaults to USD."""
+        from sipap.services.subscription import get_currency_from_phone
+
+        country, currency, symbol = get_currency_from_phone("2347025761599")
+        assert country == "USA"
+        assert currency == "USD"
+        assert symbol == "$"
+
+
+class TestFormatPrice:
+    """Tests for _format_price function."""
+
+    def test_format_ngn_no_decimals(self):
+        """NGN should be formatted without decimals."""
+        from sipap.services.subscription import _format_price
+
+        result = _format_price(3200.0, "NGN", "\u20a6")
+        assert result == "\u20a63,200"
+
+    def test_format_usd_with_decimals(self):
+        """USD should be formatted with 2 decimal places."""
+        from sipap.services.subscription import _format_price
+
+        result = _format_price(2.00, "USD", "$")
+        assert result == "$2.00"
+
+    def test_format_gbp_with_decimals(self):
+        """GBP should be formatted with 2 decimal places."""
+        from sipap.services.subscription import _format_price
+
+        result = _format_price(1.58, "GBP", "\u00a3")
+        assert result == "\u00a31.58"
+
+    def test_format_kes_no_decimals(self):
+        """KES should be formatted without decimals."""
+        from sipap.services.subscription import _format_price
+
+        result = _format_price(260.0, "KES", "KSh")
+        assert result == "KSh260"
+
+
+class TestGetLocalizedPricing:
+    """Tests for get_localized_pricing function."""
+
+    @pytest.mark.asyncio
+    async def test_usd_pricing(self):
+        """USD pricing returns base prices (rate=1.0)."""
+        from sipap.services.subscription import get_localized_pricing
+        from sipap.services.exchange_rate import clear_cache
+
+        clear_cache()
+
+        pricing = await get_localized_pricing("+14155551234")
+
+        assert pricing["country"] == "USA"
+        assert pricing["currency"] == "USD"
+        assert pricing["symbol"] == "$"
+        assert pricing["exchange_rate"] == 1.0
+        assert pricing["1_week"] == 2.00
+        assert pricing["2_weeks"] == 3.50
+        assert pricing["3_weeks"] == 5.00
+
+    @pytest.mark.asyncio
+    async def test_ngn_pricing_uses_fallback(self):
+        """NGN pricing uses fallback rate when no API key."""
+        from sipap.services.subscription import get_localized_pricing
+        from sipap.services.exchange_rate import clear_cache, FALLBACK_RATES
+        from unittest.mock import patch
+        import os
+
+        clear_cache()
+
+        with patch.dict(os.environ, {"EXCHANGE_RATE_API_KEY": ""}, clear=False):
+            pricing = await get_localized_pricing("+2347025761599")
+
+        assert pricing["country"] == "Nigeria"
+        assert pricing["currency"] == "NGN"
+        assert pricing["symbol"] == "\u20a6"
+        # Should use fallback rate
+        expected_rate = FALLBACK_RATES["NGN"]
+        assert pricing["exchange_rate"] == expected_rate
+        assert pricing["1_week"] == round(2.00 * expected_rate, 2)
+        assert pricing["2_weeks"] == round(3.50 * expected_rate, 2)
+        assert pricing["3_weeks"] == round(5.00 * expected_rate, 2)
+
+
+class TestGetPaymentLink:
+    """Tests for get_payment_link function."""
+
+    def test_new_user_gets_signup_link(self):
+        """New users should get signup URL."""
+        from sipap.services.subscription import get_payment_link, SIGNUP_URL
+
+        link = get_payment_link(user_exists=False)
+        assert link == SIGNUP_URL
+        assert link == "https://ridhatech.com/signup"
+
+    def test_existing_user_gets_subscribe_link(self):
+        """Existing users should get subscribe URL."""
+        from sipap.services.subscription import get_payment_link, SUBSCRIBE_URL
+
+        link = get_payment_link(user_exists=True)
+        assert link == SUBSCRIBE_URL
+        assert link == "https://ridhatech.com/subscribe/"
+
+
+class TestFormatSubscriptionGuidance:
+    """Tests for format_subscription_guidance function."""
+
+    @pytest.mark.asyncio
+    async def test_guidance_includes_localized_pricing(self):
+        """Guidance message should include localized prices."""
+        from sipap.services.subscription import format_subscription_guidance
+        from sipap.services.exchange_rate import clear_cache
+        from unittest.mock import patch
+        import os
+
+        clear_cache()
+
+        # Force USD (rate=1.0) by using US phone number
+        with patch.dict(os.environ, {"EXCHANGE_RATE_API_KEY": ""}, clear=False):
+            guidance = await format_subscription_guidance("+14155551234")
+
+        assert "subscription" in guidance.lower()
+        assert "$2.00" in guidance
+        assert "$3.50" in guidance
+        assert "$5.00" in guidance
+        assert 'subscribe' in guidance.lower()
+
+    @pytest.mark.asyncio
+    async def test_guidance_uses_ngn_symbol(self):
+        """Guidance for Nigerian user should use NGN symbol."""
+        from sipap.services.subscription import format_subscription_guidance
+        from sipap.services.exchange_rate import clear_cache
+        from unittest.mock import patch
+        import os
+
+        clear_cache()
+
+        with patch.dict(os.environ, {"EXCHANGE_RATE_API_KEY": ""}, clear=False):
+            guidance = await format_subscription_guidance("+2347025761599")
+
+        # Should contain Naira symbol
+        assert "\u20a6" in guidance
+        # Should NOT contain dollar sign
+        assert "$" not in guidance
+
+
+class TestCheckUserExists:
+    """Tests for check_user_exists method."""
+
+    @pytest.mark.asyncio
+    async def test_user_exists_returns_true(self):
+        """check_user_exists returns True for existing users."""
+        mock_db = MagicMock()
+        expires_at = datetime.now(UTC) + timedelta(days=7)
+
+        mock_db.execute_raw_sql.return_value = [
+            ("uuid-123", "+2348012345678", "active", "basic", expires_at, None)
+        ]
+
+        service = SubscriptionService(db=mock_db)
+        exists = await service.check_user_exists("+2348012345678")
+
+        assert exists is True
+
+    @pytest.mark.asyncio
+    async def test_user_not_found_returns_false(self):
+        """check_user_exists returns False for non-existent users."""
+        mock_db = MagicMock()
+        # User not found - empty result
+        mock_db.execute_raw_sql.return_value = []
+
+        service = SubscriptionService(db=mock_db)
+        exists = await service.check_user_exists("+2349999999999")
+
+        assert exists is False
+
+    @pytest.mark.asyncio
+    async def test_trial_user_exists(self):
+        """check_user_exists returns True for trial users (they exist)."""
+        mock_db = MagicMock()
+        mock_db.execute_raw_sql.return_value = [
+            ("uuid-123", "+2348012345678", "trial", None, None, None)
+        ]
+
+        service = SubscriptionService(db=mock_db)
+        exists = await service.check_user_exists("+2348012345678")
+
+        assert exists is True

@@ -60,6 +60,18 @@ CANCEL_SUBSCRIPTION_PATTERNS = [
     r"stop\s*charging",
 ]
 
+# Patterns for recognizing subscription requests
+SUBSCRIBE_PATTERNS = [
+    r"^subscribe$",
+    r"^i\s*want\s*to\s*subscribe$",
+    r"^sign\s*me\s*up$",
+    r"^get\s*subscription$",
+    r"^buy\s*subscription$",
+    r"^start\s*subscription$",
+    r"^renew\s*(my)?\s*subscription$",
+    r"^upgrade\s*(my)?\s*(plan|subscription)?$",
+]
+
 
 class LeagueEntity(BaseModel):
     """Structured league entity with API-Football ID for unambiguous resolution.
@@ -125,6 +137,7 @@ class RequestIntent(BaseModel):
         "show_fixtures",  # User wants to see available fixtures (no predictions)
         "check_odds",  # User wants to check odds
         "cancel_subscription",  # User wants to cancel their subscription
+        "subscribe",  # User wants to subscribe or renew subscription
         "unknown",  # Cannot determine intent
     ]
     confidence: float = Field(ge=0.0, le=1.0)  # Confidence score 0.0-1.0
@@ -243,6 +256,15 @@ class NLUAgent:
             self.logger.info("Detected subscription cancellation request")
             return RequestIntent(
                 intent_type="cancel_subscription",
+                confidence=1.0,
+                original_query=message,
+            )
+
+        # Check for subscription request (before Claude NLU)
+        if self._is_subscribe_request(message):
+            self.logger.info("Detected subscription request")
+            return RequestIntent(
+                intent_type="subscribe",
                 confidence=1.0,
                 original_query=message,
             )
@@ -449,6 +471,29 @@ class NLUAgent:
         """
         message_lower = message.lower().strip()
         for pattern in CANCEL_SUBSCRIPTION_PATTERNS:
+            if re.search(pattern, message_lower):
+                return True
+        return False
+
+    def _is_subscribe_request(self, message: str) -> bool:
+        """Check if message is a subscription request.
+
+        Args:
+            message: User message to check
+
+        Returns:
+            True if the message matches subscription patterns
+
+        Example:
+            >>> nlu._is_subscribe_request("subscribe")
+            True
+            >>> nlu._is_subscribe_request("sign me up")
+            True
+            >>> nlu._is_subscribe_request("give me btts predictions")
+            False
+        """
+        message_lower = message.lower().strip()
+        for pattern in SUBSCRIBE_PATTERNS:
             if re.search(pattern, message_lower):
                 return True
         return False
