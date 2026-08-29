@@ -123,19 +123,22 @@ class AgentToolFactory:
             1 hour, reducing costs by ~90% for repeated agent calls.
         """
         from strands.models import BedrockModel
-        from strands.models.model import CacheConfig
+        # CacheConfig import commented out - caching disabled for inference profiles
+        # from strands.models.model import CacheConfig
 
         return BedrockModel(
             model_id=model_config["model_id"],
             max_tokens=model_config.get("max_tokens", 4096),
             temperature=model_config.get("temperature", 0.1),
-            # Enable Claude prompt caching with 1-hour TTL (2026-08-23)
-            # This caches the system prompt, reducing token usage by ~90%
-            cache_config=CacheConfig(
-                strategy="auto",  # Automatically detect and inject cache points
-                ttl="1h",         # Cache for 1 hour (default is 5 minutes)
-            ),
-            cache_tools="auto",   # Cache tool definitions too
+            # DISABLED 2026-08-29: Bedrock inference profiles don't support 'auto' cache mode
+            # Error: Value 'auto' at 'toolConfig.tools.49.member.cachePoint.type'
+            # failed to satisfy constraint: Member must satisfy enum value set: [default]
+            # TODO: Re-enable when using direct model IDs or when strands fixes this
+            # cache_config=CacheConfig(
+            #     strategy="auto",  # Automatically detect and inject cache points
+            #     ttl="1h",         # Cache for 1 hour (default is 5 minutes)
+            # ),
+            # cache_tools="auto",   # Cache tool definitions too
         )
 
     def _create_output_model(self, output_schema: dict[str, Any]) -> type[BaseModel] | None:
