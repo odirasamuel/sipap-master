@@ -123,22 +123,21 @@ class AgentToolFactory:
             1 hour, reducing costs by ~90% for repeated agent calls.
         """
         from strands.models import BedrockModel
-        # CacheConfig import commented out - caching disabled for inference profiles
-        # from strands.models.model import CacheConfig
+        from strands.models.model import CacheConfig
 
         return BedrockModel(
             model_id=model_config["model_id"],
             max_tokens=model_config.get("max_tokens", 4096),
             temperature=model_config.get("temperature", 0.1),
-            # DISABLED 2026-08-29: Bedrock inference profiles don't support 'auto' cache mode
-            # Error: Value 'auto' at 'toolConfig.tools.49.member.cachePoint.type'
-            # failed to satisfy constraint: Member must satisfy enum value set: [default]
-            # TODO: Re-enable when using direct model IDs or when strands fixes this
-            # cache_config=CacheConfig(
-            #     strategy="auto",  # Automatically detect and inject cache points
-            #     ttl="1h",         # Cache for 1 hour (default is 5 minutes)
-            # ),
-            # cache_tools="auto",   # Cache tool definitions too
+            # System prompt caching enabled - saves ~70-80% tokens
+            # cache_tools REMOVED: Bedrock inference profiles reject 'auto' for tool cachePoint.type
+            # Error was: Value 'auto' at 'toolConfig.tools.49.member.cachePoint.type'
+            # Only system prompt is cached, not tool definitions
+            cache_config=CacheConfig(
+                strategy="auto",  # Automatically detect and inject cache points
+                ttl="1h",         # Cache for 1 hour (default is 5 minutes)
+            ),
+            # cache_tools="auto",  # DISABLED - causes ValidationException on inference profiles
         )
 
     def _create_output_model(self, output_schema: dict[str, Any]) -> type[BaseModel] | None:
