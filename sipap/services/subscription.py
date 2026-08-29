@@ -50,6 +50,7 @@ BASE_PRICING_USD: dict[str, float] = {
     "1_week": 2.00,
     "2_weeks": 3.50,
     "3_weeks": 5.00,
+    "4_weeks": 6.50,
 }
 
 # Currencies with no decimal places (large value currencies)
@@ -123,6 +124,7 @@ async def get_localized_pricing(phone_number: str) -> dict:
         "1_week": round(BASE_PRICING_USD["1_week"] * rate, 2),
         "2_weeks": round(BASE_PRICING_USD["2_weeks"] * rate, 2),
         "3_weeks": round(BASE_PRICING_USD["3_weeks"] * rate, 2),
+        "4_weeks": round(BASE_PRICING_USD["4_weeks"] * rate, 2),
     }
 
 
@@ -142,22 +144,50 @@ def _format_price(amount: float, currency: str, symbol: str) -> str:
     return f"{symbol}{amount:,.2f}"
 
 
+def _format_dual_price(usd_amount: float, local_amount: float, currency: str, symbol: str) -> str:
+    """Format price showing both USD and local currency.
+
+    Args:
+        usd_amount: Price in USD
+        local_amount: Price in local currency
+        currency: Local currency code (e.g., "NGN", "GBP")
+        symbol: Local currency symbol (e.g., "\u20a6", "\u00a3")
+
+    Returns:
+        Formatted dual price string, e.g., "$2 (\u20a62,677)"
+        For USD users, just returns "$2.00"
+    """
+    if currency == "USD":
+        return f"${usd_amount:.2f}"
+
+    # Format local currency
+    if currency in NO_DECIMAL_CURRENCIES:
+        local_formatted = f"{symbol}{local_amount:,.0f}"
+    else:
+        local_formatted = f"{symbol}{local_amount:,.2f}"
+
+    return f"${usd_amount:.0f} ({local_formatted})"
+
+
 async def format_subscription_guidance(phone_number: str) -> str:
     """Format subscription guidance with localized pricing.
+
+    Shows both USD base price and local currency conversion.
 
     Args:
         phone_number: User's phone number (E.164 format)
 
     Returns:
-        Localized subscription guidance message
+        Subscription guidance message with dual pricing (USD + local)
     """
     pricing = await get_localized_pricing(phone_number)
     currency = pricing["currency"]
     symbol = pricing["symbol"]
 
-    p1 = _format_price(pricing["1_week"], currency, symbol)
-    p2 = _format_price(pricing["2_weeks"], currency, symbol)
-    p3 = _format_price(pricing["3_weeks"], currency, symbol)
+    p1 = _format_dual_price(BASE_PRICING_USD["1_week"], pricing["1_week"], currency, symbol)
+    p2 = _format_dual_price(BASE_PRICING_USD["2_weeks"], pricing["2_weeks"], currency, symbol)
+    p3 = _format_dual_price(BASE_PRICING_USD["3_weeks"], pricing["3_weeks"], currency, symbol)
+    p4 = _format_dual_price(BASE_PRICING_USD["4_weeks"], pricing["4_weeks"], currency, symbol)
 
     return f"""You need an active subscription to access predictions.
 
@@ -165,6 +195,7 @@ Subscribe to our weekly plan:
 - 1 Week: {p1} (7 days of unlimited predictions)
 - 2 Weeks: {p2} (14 days)
 - 3 Weeks: {p3} (21 days)
+- 4 Weeks: {p4} (28 days)
 
 Reply "subscribe" to get started!"""
 
@@ -172,19 +203,22 @@ Reply "subscribe" to get started!"""
 async def format_trial_used_guidance(phone_number: str) -> str:
     """Format trial-used guidance with localized pricing.
 
+    Shows both USD base price and local currency conversion.
+
     Args:
         phone_number: User's phone number (E.164 format)
 
     Returns:
-        Localized trial-used guidance message
+        Trial-used guidance message with dual pricing (USD + local)
     """
     pricing = await get_localized_pricing(phone_number)
     currency = pricing["currency"]
     symbol = pricing["symbol"]
 
-    p1 = _format_price(pricing["1_week"], currency, symbol)
-    p2 = _format_price(pricing["2_weeks"], currency, symbol)
-    p3 = _format_price(pricing["3_weeks"], currency, symbol)
+    p1 = _format_dual_price(BASE_PRICING_USD["1_week"], pricing["1_week"], currency, symbol)
+    p2 = _format_dual_price(BASE_PRICING_USD["2_weeks"], pricing["2_weeks"], currency, symbol)
+    p3 = _format_dual_price(BASE_PRICING_USD["3_weeks"], pricing["3_weeks"], currency, symbol)
+    p4 = _format_dual_price(BASE_PRICING_USD["4_weeks"], pricing["4_weeks"], currency, symbol)
 
     return f"""You've already used your free trial prediction.
 
@@ -192,6 +226,7 @@ To continue accessing predictions, subscribe to our weekly plan:
 - 1 Week: {p1} (7 days of unlimited predictions)
 - 2 Weeks: {p2} (14 days)
 - 3 Weeks: {p3} (21 days)
+- 4 Weeks: {p4} (28 days)
 
 Reply "subscribe" to get started!"""
 

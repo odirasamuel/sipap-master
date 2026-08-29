@@ -949,7 +949,8 @@ class MainOrchestrator:
             SubscriptionService,
             get_localized_pricing,
             get_payment_link,
-            _format_price,
+            _format_dual_price,
+            BASE_PRICING_USD,
         )
 
         try:
@@ -967,10 +968,11 @@ class MainOrchestrator:
             currency = pricing["currency"]
             symbol = pricing["symbol"]
 
-            # Format prices
-            p1 = _format_price(pricing["1_week"], currency, symbol)
-            p2 = _format_price(pricing["2_weeks"], currency, symbol)
-            p3 = _format_price(pricing["3_weeks"], currency, symbol)
+            # Format prices with dual currency (USD + local)
+            p1 = _format_dual_price(BASE_PRICING_USD["1_week"], pricing["1_week"], currency, symbol)
+            p2 = _format_dual_price(BASE_PRICING_USD["2_weeks"], pricing["2_weeks"], currency, symbol)
+            p3 = _format_dual_price(BASE_PRICING_USD["3_weeks"], pricing["3_weeks"], currency, symbol)
+            p4 = _format_dual_price(BASE_PRICING_USD["4_weeks"], pricing["4_weeks"], currency, symbol)
 
             # Set action text based on user status
             if user_exists:
@@ -984,6 +986,7 @@ class MainOrchestrator:
 - 1 Week: {p1}
 - 2 Weeks: {p2}
 - 3 Weeks: {p3}
+- 4 Weeks: {p4}
 
 *What you get:*
 - Unlimited predictions for your subscription period
