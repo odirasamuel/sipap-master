@@ -282,27 +282,28 @@ class BatchOrchestrator:
                 analysis = await self._predict_fixture(fixture, user_id)
 
                 # Apply quality gates using the BEST market
+                # CRITICAL: Selection is based on PROBABILITY, not EV
+                # Markets are selected if confidence meets threshold - odds are optional
                 best_market = analysis.get("best_market", {})
                 confidence = best_market.get("confidence", analysis.get("confidence", 0))
-                ev = best_market.get("ev", analysis.get("ev", 0))
+                probability = best_market.get("probability", analysis.get("probability", 0))
                 market_code = best_market.get("market_code", "?")
                 outcome = best_market.get("best_outcome", "?")
                 bookmaker_odd = best_market.get("bookmaker_odd", 0)
 
-                if (
-                    confidence >= thresholds["min_confidence"]
-                    and ev >= thresholds["min_ev"]
-                ):
+                # Quality gate: ONLY check confidence (probability-based)
+                # EV is informational only - NOT used for selection criteria
+                if confidence >= thresholds["min_confidence"]:
                     accepted.append(analysis)
+                    odds_info = f"@ {bookmaker_odd}" if bookmaker_odd > 0 else "(no odds)"
                     self.logger.info(
-                        f"   ✅ ACCEPTED: {market_code} → {outcome} @ {bookmaker_odd} "
-                        f"(conf={confidence:.2f}, ev={ev:+.4f})"
+                        f"   ✅ ACCEPTED: {market_code} → {outcome} {odds_info} "
+                        f"(prob={probability:.2f}, conf={confidence:.2f})"
                     )
                 else:
                     self.logger.info(
                         f"   ❌ REJECTED: {market_code} → {outcome} "
-                        f"(conf={confidence:.2f} < {thresholds['min_confidence']}, "
-                        f"ev={ev:+.4f} < {thresholds['min_ev']})"
+                        f"(conf={confidence:.2f} < {thresholds['min_confidence']})"
                     )
 
             except Exception as e:
@@ -528,8 +529,7 @@ class BatchOrchestrator:
             warning = (
                 f"Only accumulated {accumulated_sum:.1f} odds (target: {target}). "
                 f"Not enough fixtures met your quality criteria "
-                f"(confidence >= {thresholds['min_confidence']:.0%}, "
-                f"EV >= {thresholds['min_ev']:.0%})."
+                f"(confidence >= {thresholds['min_confidence']:.0%})."
             )
 
         if failed_predictions > 0:
@@ -866,8 +866,7 @@ class BatchOrchestrator:
                 f"Only accumulated {accumulated_sum:.1f} odds (target: {target}) "
                 f"after expanding to {days_expanded + 1} day(s). "
                 f"Not enough fixtures met your quality criteria "
-                f"(confidence >= {thresholds['min_confidence']:.0%}, "
-                f"EV >= {thresholds['min_ev']:.0%})."
+                f"(confidence >= {thresholds['min_confidence']:.0%})."
             )
 
         if failed_predictions > 0:

@@ -1,6 +1,6 @@
 """Unit tests for SubscriptionService.
 
-Tests subscription validation, date range checking, and cancellation.
+Tests subscription validation, access control, trial usage, and cancellation.
 """
 
 from datetime import datetime, timedelta, UTC
@@ -13,6 +13,8 @@ from sipap.services.subscription import (
     SUBSCRIPTION_DATE_GUIDANCE,
     SUBSCRIPTION_EXPIRED_GUIDANCE,
     TRIAL_DATE_GUIDANCE,
+    TRIAL_USED_GUIDANCE,
+    NO_SUBSCRIPTION_GUIDANCE,
 )
 
 
@@ -43,13 +45,14 @@ class TestGetSubscriptionInfo:
 
     @pytest.mark.asyncio
     async def test_returns_trial_for_new_user_without_db(self, service):
-        """Without database, all users are treated as trial."""
+        """Without database, all users are treated as trial (not used)."""
         info = await service.get_subscription_info("user_123")
 
         assert info["user_id"] == "user_123"
         assert info["subscription_status"] == "trial"
         assert info["subscription_tier"] is None
         assert info["subscription_expires_at"] is None
+        assert info["trial_used_at"] is None  # Trial not used yet
         # Trial users can only access today
         assert info["max_prediction_date"].date() == datetime.now(UTC).date()
 
@@ -59,9 +62,9 @@ class TestGetSubscriptionInfo:
         mock_db = MagicMock()
         expires_at = datetime.now(UTC) + timedelta(days=7)
 
-        # Mock database result
+        # Mock database result (with trial_used_at column)
         mock_db.execute_raw_sql.return_value = [
-            ("uuid-123", "+2348012345678", "active", "basic", expires_at)
+            ("uuid-123", "+2348012345678", "active", "basic", expires_at, None)
         ]
 
         service = SubscriptionService(db=mock_db)
@@ -80,7 +83,7 @@ class TestGetSubscriptionInfo:
 
         # Mock database result
         mock_db.execute_raw_sql.return_value = [
-            ("uuid-123", "+2348012345678", "active", "basic", expired_at)
+            ("uuid-123", "+2348012345678", "active", "basic", expired_at, None)
         ]
 
         service = SubscriptionService(db=mock_db)
@@ -90,9 +93,191 @@ class TestGetSubscriptionInfo:
         # Verify update was called
         assert mock_db.execute_raw_sql.call_count == 2  # Query + Update
 
+    @pytest.mark.asyncio
+    async def test_returns_trial_used_at(self):
+        """Trial user with used trial returns trial_used_at."""
+        mock_db = MagicMock()
+        trial_used_time = datetime.now(UTC) - timedelta(hours=2)
+
+        # Mock database result with trial_used_at set
+        mock_db.execute_raw_sql.return_value = [
+            ("uuid-123", "+2348012345678", "trial", None, None, trial_used_time)
+        ]
+
+        service = SubscriptionService(db=mock_db)
+        info = await service.get_subscription_info("+2348012345678")
+
+        assert info["subscription_status"] == "trial"
+        assert info["trial_used_at"] == trial_used_time
+
+
+class TestValidateAccess:
+    """Tests for validate_access() - the PRIMARY validation method."""
+
+    @pytest.fixture
+    def service(self):
+        """Create service without database (trial mode)."""
+        return SubscriptionService(db=None)
+
+    @pytest.mark.asyncio
+    async def test_trial_user_first_request_allowed(self, service):
+        """Trial users can make ONE free request."""
+        # Without DB, user is treated as trial (not used)
+        is_valid, guidance = await service.validate_access("user_123")
+
+        assert is_valid is True
+        assert guidance is None
+
+    @pytest.mark.asyncio
+    async def test_trial_user_second_request_blocked(self):
+        """Trial users are blocked after using their free request."""
+        mock_db = MagicMock()
+        trial_used_time = datetime.now(UTC) - timedelta(hours=1)
+
+        # Mock: trial user who already used their free request
+        mock_db.execute_raw_sql.return_value = [
+            ("uuid-123", "+2348012345678", "trial", None, None, trial_used_time)
+        ]
+
+        service = SubscriptionService(db=mock_db)
+        is_valid, guidance = await service.validate_access("+2348012345678")
+
+        assert is_valid is False
+        assert guidance == TRIAL_USED_GUIDANCE
+
+    @pytest.mark.asyncio
+    async def test_active_user_allowed(self):
+        """Active users can access predictions."""
+        mock_db = MagicMock()
+        expires_at = datetime.now(UTC) + timedelta(days=7)
+
+        mock_db.execute_raw_sql.return_value = [
+            ("uuid-123", "+2348012345678", "active", "basic", expires_at, None)
+        ]
+
+        service = SubscriptionService(db=mock_db)
+        is_valid, guidance = await service.validate_access("+2348012345678")
+
+        assert is_valid is True
+        assert guidance is None
+
+    @pytest.mark.asyncio
+    async def test_active_user_explicit_future_date_blocked(self):
+        """Active users blocked when explicitly requesting dates past subscription."""
+        mock_db = MagicMock()
+        expires_at = datetime.now(UTC) + timedelta(days=7)
+
+        mock_db.execute_raw_sql.return_value = [
+            ("uuid-123", "+2348012345678", "active", "basic", expires_at, None)
+        ]
+
+        service = SubscriptionService(db=mock_db)
+        # Request date 10 days from now (3 days past subscription)
+        requested_date = datetime.now(UTC) + timedelta(days=10)
+
+        is_valid, guidance = await service.validate_access("+2348012345678", requested_date)
+
+        assert is_valid is False
+        assert "Your subscription allows predictions up to" in guidance
+
+    @pytest.mark.asyncio
+    async def test_active_user_within_period_allowed(self):
+        """Active users can request within subscription period."""
+        mock_db = MagicMock()
+        expires_at = datetime.now(UTC) + timedelta(days=7)
+
+        mock_db.execute_raw_sql.return_value = [
+            ("uuid-123", "+2348012345678", "active", "basic", expires_at, None)
+        ]
+
+        service = SubscriptionService(db=mock_db)
+        # Request date 3 days from now (within subscription)
+        requested_date = datetime.now(UTC) + timedelta(days=3)
+
+        is_valid, guidance = await service.validate_access("+2348012345678", requested_date)
+
+        assert is_valid is True
+        assert guidance is None
+
+    @pytest.mark.asyncio
+    async def test_expired_user_blocked(self):
+        """Expired users are blocked."""
+        mock_db = MagicMock()
+        expired_at = datetime.now(UTC) - timedelta(days=1)
+
+        mock_db.execute_raw_sql.return_value = [
+            ("uuid-123", "+2348012345678", "expired", "basic", expired_at, None)
+        ]
+
+        service = SubscriptionService(db=mock_db)
+        is_valid, guidance = await service.validate_access("+2348012345678")
+
+        assert is_valid is False
+        assert guidance == SUBSCRIPTION_EXPIRED_GUIDANCE
+
+    @pytest.mark.asyncio
+    async def test_cancelled_within_period_allowed(self):
+        """Cancelled users can access until expires_at."""
+        mock_db = MagicMock()
+        expires_at = datetime.now(UTC) + timedelta(days=3)  # Still active
+
+        mock_db.execute_raw_sql.return_value = [
+            ("uuid-123", "+2348012345678", "cancelled", "basic", expires_at, None)
+        ]
+
+        service = SubscriptionService(db=mock_db)
+        is_valid, guidance = await service.validate_access("+2348012345678")
+
+        assert is_valid is True
+        assert guidance is None
+
+    @pytest.mark.asyncio
+    async def test_cancelled_past_period_blocked(self):
+        """Cancelled users are blocked after expiry."""
+        mock_db = MagicMock()
+        expired_at = datetime.now(UTC) - timedelta(days=1)  # Already expired
+
+        mock_db.execute_raw_sql.return_value = [
+            ("uuid-123", "+2348012345678", "cancelled", "basic", expired_at, None)
+        ]
+
+        service = SubscriptionService(db=mock_db)
+        is_valid, guidance = await service.validate_access("+2348012345678")
+
+        assert is_valid is False
+        assert guidance == SUBSCRIPTION_EXPIRED_GUIDANCE
+
+
+class TestMarkTrialUsed:
+    """Tests for mark_trial_used()."""
+
+    @pytest.mark.asyncio
+    async def test_mark_trial_without_db_fails(self):
+        """Marking trial fails without database."""
+        service = SubscriptionService(db=None)
+
+        result = await service.mark_trial_used("user_123")
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_mark_trial_success(self):
+        """Marking trial as used succeeds with database."""
+        mock_db = MagicMock()
+        mock_db.execute_raw_sql.return_value = []  # Update returns no rows
+
+        service = SubscriptionService(db=mock_db)
+        result = await service.mark_trial_used("+2348012345678")
+
+        assert result is True
+        # Verify update was called
+        assert mock_db.execute_raw_sql.called
+        call_args = mock_db.execute_raw_sql.call_args
+        assert "trial_used_at" in call_args[0][0]
+
 
 class TestValidateDateRange:
-    """Tests for validate_date_range()."""
+    """Tests for validate_date_range() - legacy date-only validation."""
 
     @pytest.fixture
     def service(self):
@@ -126,7 +311,7 @@ class TestValidateDateRange:
         expires_at = datetime.now(UTC) + timedelta(days=7)
 
         mock_db.execute_raw_sql.return_value = [
-            ("uuid-123", "+2348012345678", "active", "basic", expires_at)
+            ("uuid-123", "+2348012345678", "active", "basic", expires_at, None)
         ]
 
         service = SubscriptionService(db=mock_db)
@@ -144,7 +329,7 @@ class TestValidateDateRange:
         expires_at = datetime.now(UTC) + timedelta(days=7)
 
         mock_db.execute_raw_sql.return_value = [
-            ("uuid-123", "+2348012345678", "active", "basic", expires_at)
+            ("uuid-123", "+2348012345678", "active", "basic", expires_at, None)
         ]
 
         service = SubscriptionService(db=mock_db)
@@ -162,7 +347,7 @@ class TestValidateDateRange:
         expired_at = datetime.now(UTC) - timedelta(days=1)
 
         mock_db.execute_raw_sql.return_value = [
-            ("uuid-123", "+2348012345678", "expired", "basic", expired_at)
+            ("uuid-123", "+2348012345678", "expired", "basic", expired_at, None)
         ]
 
         service = SubscriptionService(db=mock_db)
@@ -180,7 +365,7 @@ class TestValidateDateRange:
         expires_at = datetime.now(UTC) + timedelta(days=3)  # Still active
 
         mock_db.execute_raw_sql.return_value = [
-            ("uuid-123", "+2348012345678", "cancelled", "basic", expires_at)
+            ("uuid-123", "+2348012345678", "cancelled", "basic", expires_at, None)
         ]
 
         service = SubscriptionService(db=mock_db)
@@ -198,7 +383,7 @@ class TestValidateDateRange:
         expired_at = datetime.now(UTC) - timedelta(days=1)  # Already expired
 
         mock_db.execute_raw_sql.return_value = [
-            ("uuid-123", "+2348012345678", "cancelled", "basic", expired_at)
+            ("uuid-123", "+2348012345678", "cancelled", "basic", expired_at, None)
         ]
 
         service = SubscriptionService(db=mock_db)
@@ -231,7 +416,7 @@ class TestCancelSubscription:
 
         # First call: get subscription info
         mock_db.execute_raw_sql.side_effect = [
-            [("uuid-123", "+2348012345678", "active", "basic", expires_at)],  # Get info
+            [("uuid-123", "+2348012345678", "active", "basic", expires_at, None)],  # Get info
             [],  # Update
         ]
 
@@ -248,7 +433,7 @@ class TestCancelSubscription:
         mock_db = MagicMock()
 
         mock_db.execute_raw_sql.return_value = [
-            ("uuid-123", "+2348012345678", "trial", None, None)
+            ("uuid-123", "+2348012345678", "trial", None, None, None)
         ]
 
         service = SubscriptionService(db=mock_db)
@@ -264,7 +449,7 @@ class TestCancelSubscription:
         expires_at = datetime.now(UTC) + timedelta(days=3)
 
         mock_db.execute_raw_sql.return_value = [
-            ("uuid-123", "+2348012345678", "cancelled", "basic", expires_at)
+            ("uuid-123", "+2348012345678", "cancelled", "basic", expires_at, None)
         ]
 
         service = SubscriptionService(db=mock_db)

@@ -714,20 +714,22 @@ class MainOrchestrator:
             self.conversation_manager.add_assistant_message(user_id, result["message"])
             return result
 
-        # Step 3.8: Validate date range against subscription (for prediction intents)
+        # Step 3.8: Validate subscription access (for prediction intents)
+        # This checks: subscription status, trial usage (ONE free request), and explicit date ranges
+        is_trial_user = False
         if intent.intent_type in ("single_prediction", "batch_prediction"):
-            date_validation = await self._validate_date_against_subscription(intent, user_id)
-            if not date_validation["is_valid"]:
+            access_validation = await self._validate_subscription_access(intent, user_id)
+            if not access_validation["is_valid"]:
                 self.logger.info(
-                    "Date range exceeds subscription period",
+                    "Subscription access denied",
                     extra={
                         "user_id": user_id,
                         "requested_date": str(intent.date_range),
                     },
                 )
                 response = {
-                    "message": date_validation["guidance_message"],
-                    "intent": "subscription_date_exceeded",
+                    "message": access_validation["guidance_message"],
+                    "intent": "subscription_required",
                     "data": {
                         "original_intent": intent.intent_type,
                         "requested_date_range": intent.date_range,
@@ -736,6 +738,8 @@ class MainOrchestrator:
                 }
                 self.conversation_manager.add_assistant_message(user_id, response["message"])
                 return response
+            # Track if this is a trial user (to mark trial as used after success)
+            is_trial_user = access_validation.get("is_trial", False)
 
         # Step 4: Route based on intent_type
         if intent.intent_type == "batch_prediction":
@@ -811,6 +815,16 @@ class MainOrchestrator:
 
         # Step 5: Add assistant response to conversation
         self.conversation_manager.add_assistant_message(user_id, result["message"])
+
+        # Step 6: Mark trial as used if this was a trial user's first prediction
+        if is_trial_user and result.get("error") is None:
+            from sipap.services.subscription import SubscriptionService
+            try:
+                service = SubscriptionService()
+                await service.mark_trial_used(user_id)
+                self.logger.info(f"Marked trial as used for user {user_id}")
+            except Exception as e:
+                self.logger.warning(f"Failed to mark trial as used for {user_id}: {e}")
 
         return result
 
@@ -906,21 +920,28 @@ class MainOrchestrator:
                 "error": str(e),
             }
 
-    async def _validate_date_against_subscription(
+    async def _validate_subscription_access(
         self,
         intent: RequestIntent,
         user_id: str,
     ) -> dict[str, Any]:
-        """Validate if requested date range is within user's subscription period.
+        """Validate if user can access predictions (subscription + date validation).
+
+        This is the PRIMARY validation for ALL prediction requests.
+        It checks:
+        1. Subscription status (active, trial, expired)
+        2. Trial usage (trial users get ONE free request only)
+        3. Date range (only if user explicitly requests future dates)
 
         Args:
-            intent: Parsed intent with date_range
+            intent: Parsed intent with optional date_range
             user_id: User identifier
 
         Returns:
             Dictionary with validation result:
-            - is_valid: True if date range is within subscription
+            - is_valid: True if user can access predictions
             - guidance_message: Message if validation failed
+            - is_trial: True if this is a trial user (for marking trial as used after success)
         """
         from datetime import datetime, UTC
         from sipap.services.subscription import SubscriptionService
@@ -928,7 +949,9 @@ class MainOrchestrator:
         try:
             service = SubscriptionService()
 
-            # Determine the requested end date
+            # Determine if user explicitly requested a future date
+            # (Only pass requested_end if explicitly specified, not default)
+            requested_end = None
             if intent.date_range:
                 # Parse end date from date_range
                 end_date_str = intent.date_range.get("end") or intent.date_range.get("start")
@@ -937,28 +960,29 @@ class MainOrchestrator:
                     try:
                         requested_end = datetime.strptime(end_date_str, "%Y-%m-%d").replace(tzinfo=UTC)
                     except ValueError:
-                        # If parsing fails, assume today
-                        requested_end = datetime.now(UTC)
-                else:
-                    requested_end = datetime.now(UTC)
-            else:
-                # No date range specified - default to today (always valid)
-                requested_end = datetime.now(UTC)
+                        # If parsing fails, don't pass explicit date
+                        requested_end = None
 
-            # Validate date range against subscription
-            is_valid, guidance_message = await service.validate_date_range(user_id, requested_end)
+            # Validate subscription access (handles trial, active, expired, etc.)
+            is_valid, guidance_message = await service.validate_access(user_id, requested_end)
+
+            # Check if this is a trial user (for marking trial as used after success)
+            info = await service.get_subscription_info(user_id)
+            is_trial = info["subscription_status"] == "trial" and info["trial_used_at"] is None
 
             return {
                 "is_valid": is_valid,
                 "guidance_message": guidance_message,
+                "is_trial": is_trial,
             }
 
         except Exception as e:
-            self.logger.error(f"Error validating date range for {user_id}: {e}", exc_info=True)
+            self.logger.error(f"Error validating subscription access for {user_id}: {e}", exc_info=True)
             # On error, allow the request to proceed (fail open)
             return {
                 "is_valid": True,
                 "guidance_message": None,
+                "is_trial": False,
             }
 
     async def _handle_batch_prediction(

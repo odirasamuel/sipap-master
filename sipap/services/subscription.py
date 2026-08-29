@@ -1,14 +1,15 @@
 """Subscription management service for SIPAP.
 
-Handles subscription validation, date range checking, and cancellation.
-Ensures users can only access predictions within their subscription period.
+Handles subscription validation, access control, and cancellation.
+Ensures users can only access predictions with valid subscription.
 
 Key Features:
-- Trial users: today's matches only
+- Trial users: ONE free prediction request only (not unlimited)
 - Active subscribers: up to subscription_expires_at
 - Rolling week model: 7 days from subscription start (not calendar week)
 - Multi-week support: 2/3/4 weeks get full period access
 - Cancellation: retains access until expires_at
+- Date validation: blocks explicit future dates past subscription
 """
 
 import os
@@ -24,10 +25,28 @@ logger = get_logger(__name__)
 
 
 # Guidance messages for different subscription states
-TRIAL_DATE_GUIDANCE = """You're on the free trial, which allows predictions for today's matches only.
+TRIAL_DATE_GUIDANCE = """You're on the free trial, which allows ONE free prediction request.
 
-To access predictions for future matches, subscribe to our weekly plan:
+You've already used your free trial. To continue accessing predictions, subscribe to our weekly plan:
 - 1 Week: $2 (7 days of predictions)
+- 2 Weeks: $3.50 (14 days)
+- 3 Weeks: $5 (21 days)
+
+Reply "subscribe" to get started!"""
+
+TRIAL_USED_GUIDANCE = """You've already used your free trial prediction.
+
+To continue accessing predictions, subscribe to our weekly plan:
+- 1 Week: $2 (7 days of unlimited predictions)
+- 2 Weeks: $3.50 (14 days)
+- 3 Weeks: $5 (21 days)
+
+Reply "subscribe" to get started!"""
+
+NO_SUBSCRIPTION_GUIDANCE = """You need an active subscription to access predictions.
+
+Subscribe to our weekly plan:
+- 1 Week: $2 (7 days of unlimited predictions)
 - 2 Weeks: $3.50 (14 days)
 - 3 Weeks: $5 (21 days)
 
@@ -69,6 +88,7 @@ class SubscriptionInfo(TypedDict):
     subscription_tier: str | None
     subscription_expires_at: datetime | None
     max_prediction_date: datetime | None  # Same as expires_at for clarity
+    trial_used_at: datetime | None  # When trial was used (None = not used yet)
 
 
 class SubscriptionService:
@@ -152,7 +172,7 @@ class SubscriptionService:
             DatabaseError: On database query failure
         """
         if not self.db:
-            # Development mode: return mock trial user
+            # Development mode: return mock trial user (trial NOT used)
             logger.debug(f"No database - returning mock trial for user {user_id}")
             return SubscriptionInfo(
                 user_id=user_id,
@@ -161,17 +181,19 @@ class SubscriptionService:
                 subscription_tier=None,
                 subscription_expires_at=None,
                 max_prediction_date=datetime.now(UTC),  # Today only for trial
+                trial_used_at=None,  # Trial not used yet
             )
 
         try:
-            # Query users table
+            # Query users table (trial_used_at tracks when the one free request was used)
             sql = """
                 SELECT
                     id,
                     phone_number,
                     subscription_status,
                     subscription_tier,
-                    subscription_expires_at
+                    subscription_expires_at,
+                    trial_used_at
                 FROM users
                 WHERE id = :user_id OR phone_number = :user_id
                 LIMIT 1
@@ -179,7 +201,7 @@ class SubscriptionService:
             results = self.db.execute_raw_sql(sql, {"user_id": user_id})
 
             if not results:
-                # New user - treat as trial
+                # New user - treat as trial (not used yet)
                 logger.info(f"User {user_id} not found in database - treating as trial")
                 return SubscriptionInfo(
                     user_id=user_id,
@@ -188,6 +210,7 @@ class SubscriptionService:
                     subscription_tier=None,
                     subscription_expires_at=None,
                     max_prediction_date=datetime.now(UTC),
+                    trial_used_at=None,
                 )
 
             row = results[0]
@@ -196,6 +219,7 @@ class SubscriptionService:
             status = row[2] or "trial"
             tier = row[3]
             expires_at = row[4]
+            trial_used_at = row[5] if len(row) > 5 else None
 
             # Check if subscription has expired
             if status == "active" and expires_at:
@@ -216,7 +240,7 @@ class SubscriptionService:
             # Determine max prediction date
             max_date: datetime | None = None
             if status == "trial":
-                max_date = datetime.now(UTC)  # Today only
+                max_date = datetime.now(UTC)  # Today only (but trial is limited to ONE request)
             elif status == "active" and expires_at:
                 max_date = expires_at
             elif status in ("expired", "cancelled"):
@@ -233,6 +257,7 @@ class SubscriptionService:
                 subscription_tier=tier,
                 subscription_expires_at=expires_at,
                 max_prediction_date=max_date,
+                trial_used_at=trial_used_at,
             )
 
         except DatabaseError:
@@ -240,6 +265,156 @@ class SubscriptionService:
         except Exception as e:
             logger.error(f"Error getting subscription info for {user_id}: {e}")
             raise DatabaseError(f"Failed to get subscription info: {e}") from e
+
+    async def validate_access(
+        self,
+        user_id: str,
+        requested_end: datetime | None = None,
+    ) -> tuple[bool, str | None]:
+        """Validate if user can access predictions.
+
+        This is the PRIMARY validation method for ALL prediction requests.
+        It checks:
+        1. Subscription status (active, trial, expired, cancelled)
+        2. Trial usage (trial users get ONE free request only)
+        3. Date range (if explicitly requesting future dates)
+
+        Args:
+            user_id: The user's ID
+            requested_end: Optional end date (for explicit future date validation)
+
+        Returns:
+            Tuple of (is_valid, guidance_message)
+            - (True, None) if user can access predictions
+            - (False, "guidance message") if access denied
+
+        Example:
+            >>> is_valid, msg = await service.validate_access("user_123")
+            >>> if not is_valid:
+            ...     return {"message": msg, "intent": "subscription_required"}
+        """
+        info = await self.get_subscription_info(user_id)
+        now = datetime.now(UTC)
+
+        # Trial users: ONE free request only
+        if info["subscription_status"] == "trial":
+            if info["trial_used_at"] is not None:
+                # Trial already used
+                logger.info(f"Trial user {user_id} blocked: trial already used at {info['trial_used_at']}")
+                return (False, TRIAL_USED_GUIDANCE)
+            # Trial not used yet - allow (will be marked as used after prediction)
+            logger.info(f"Trial user {user_id} allowed: first free prediction")
+            return (True, None)
+
+        # Active subscription: check expiry and optional date range
+        if info["subscription_status"] == "active":
+            expires_at = info["subscription_expires_at"]
+            if expires_at and now > expires_at:
+                # Subscription expired (shouldn't reach here if get_subscription_info updates status)
+                logger.info(f"Active user {user_id} blocked: subscription expired at {expires_at}")
+                return (False, SUBSCRIPTION_EXPIRED_GUIDANCE)
+
+            # Check date range if explicitly requested
+            if requested_end:
+                is_valid, guidance = await self._validate_explicit_date(info, requested_end)
+                if not is_valid:
+                    return (False, guidance)
+
+            return (True, None)
+
+        # Cancelled but not yet expired: can still access until expires_at
+        if info["subscription_status"] == "cancelled":
+            expires_at = info["subscription_expires_at"]
+            if expires_at and now <= expires_at:
+                # Still within subscription period
+                if requested_end:
+                    is_valid, guidance = await self._validate_explicit_date(info, requested_end)
+                    if not is_valid:
+                        return (False, guidance)
+                return (True, None)
+            # Past expiration
+            logger.info(f"Cancelled user {user_id} blocked: subscription fully expired")
+            return (False, SUBSCRIPTION_EXPIRED_GUIDANCE)
+
+        # Expired: block entirely
+        if info["subscription_status"] == "expired":
+            logger.info(f"Expired user {user_id} blocked")
+            return (False, SUBSCRIPTION_EXPIRED_GUIDANCE)
+
+        # Unknown status - block with guidance
+        logger.warning(f"Unknown subscription status for user {user_id}: {info['subscription_status']}")
+        return (False, NO_SUBSCRIPTION_GUIDANCE)
+
+    async def _validate_explicit_date(
+        self,
+        info: SubscriptionInfo,
+        requested_end: datetime,
+    ) -> tuple[bool, str | None]:
+        """Validate explicitly requested date against subscription period.
+
+        Only called when user explicitly requests a future date.
+
+        Args:
+            info: User's subscription info
+            requested_end: The explicitly requested end date
+
+        Returns:
+            Tuple of (is_valid, guidance_message)
+        """
+        expires_at = info["subscription_expires_at"]
+        if not expires_at:
+            return (True, None)
+
+        requested_date = requested_end.date() if isinstance(requested_end, datetime) else requested_end
+        expires_date = expires_at.date() if isinstance(expires_at, datetime) else expires_at
+
+        if requested_date > expires_date:
+            days_over = (requested_date - expires_date).days
+            guidance = SUBSCRIPTION_DATE_GUIDANCE.format(
+                expires_date=expires_date.strftime("%B %d, %Y"),
+                requested_date=requested_date.strftime("%B %d, %Y"),
+                days_over=days_over,
+            )
+            logger.info(
+                f"User blocked: requested {requested_date}, expires {expires_date} ({days_over} days over)"
+            )
+            return (False, guidance)
+
+        return (True, None)
+
+    async def mark_trial_used(self, user_id: str) -> bool:
+        """Mark trial as used for a user.
+
+        Called after a trial user successfully receives their first prediction.
+
+        Args:
+            user_id: The user's ID
+
+        Returns:
+            True if successfully marked, False otherwise
+        """
+        if not self.db:
+            logger.warning("No database - cannot mark trial as used")
+            return False
+
+        try:
+            now = datetime.now(UTC)
+
+            # Update trial_used_at in database
+            # Use COALESCE to only set if not already set (idempotent)
+            update_sql = """
+                UPDATE users
+                SET trial_used_at = COALESCE(trial_used_at, :now),
+                    updated_at = :now
+                WHERE id = :user_id OR phone_number = :user_id
+            """
+            self.db.execute_raw_sql(update_sql, {"user_id": user_id, "now": now})
+            logger.info(f"Marked trial as used for user {user_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error marking trial as used for {user_id}: {e}")
+            return False
 
     async def validate_date_range(
         self,
