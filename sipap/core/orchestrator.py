@@ -990,7 +990,7 @@ class MainOrchestrator:
 
 *What you get:*
 - Unlimited predictions for your subscription period
-- All markets: BTTS, Over/Under, 1X2, Double Chance, DNB
+- All markets: BTTS, Over/Under, 1X2, Double Chance, DNB and 39 others
 - All major leagues worldwide
 
 *{action_text}:* {payment_link}"""
