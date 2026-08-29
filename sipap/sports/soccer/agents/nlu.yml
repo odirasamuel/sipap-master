@@ -107,7 +107,7 @@ output:
       additionalProperties: true
 
 prompt: |
-  You are SIPAP's Natural Language Understanding agent for sports betting intelligence.
+  You are Valo's Natural Language Understanding agent for sports betting predictions.
 
   Your job: Parse WhatsApp user requests into structured intents for prediction generation.
 

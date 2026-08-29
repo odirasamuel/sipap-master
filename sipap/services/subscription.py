@@ -73,10 +73,9 @@ CANCELLATION_SUCCESS_MESSAGE = """Your subscription has been cancelled.
 You'll retain access until {expires_date}.
 
 After that, you can:
-- Continue with the free trial (today's matches only)
 - Resubscribe anytime with "subscribe"
 
-Thank you for using SIPAP!"""
+Thank you for using Valo!"""
 
 
 class SubscriptionInfo(TypedDict):

@@ -1818,34 +1818,24 @@ class ClarificationAgent:
             ):
                 return ClarificationResponse(
                     clarification_type="guide_to_feature",
-                    message="Hey! 👋 I'm SIPAP. I help you find smart betting opportunities. Try:",
+                    message="Hey! 👋 I'm Valo, your smart betting assistant. Tell me market + league:",
                     suggested_actions=[
-                        {"number": "1", "label": "Get predictions", "example": "Give me 20 odds"},
-                        {"number": "2", "label": "Check results", "example": "Arsenal results today"},
-                        {"number": "3", "label": "See fixtures", "example": "What matches are available?"},
+                        {"number": "1", "label": "BTTS", "example": "BTTS picks from Premier League"},
+                        {"number": "2", "label": "Over 2.5", "example": "Over 2.5 picks from La Liga"},
+                        {"number": "3", "label": "Double Chance", "example": "DC picks from Serie A"},
+                        {"number": "4", "label": "1X2", "example": "1X2 picks from Bundesliga"},
                     ],
                     follow_up_context=None,
                 )
             else:
                 return ClarificationResponse(
                     clarification_type="guide_to_feature",
-                    message="I'm here to help! Here's what I can do for you:",
+                    message="I'm Valo, your smart betting assistant. Tell me market + league:",
                     suggested_actions=[
-                        {
-                            "number": "1",
-                            "label": "🎯 Get predictions (accumulated odds)",
-                            "example": "Give me 20 odds with highest success",
-                        },
-                        {
-                            "number": "2",
-                            "label": "📊 Check match results/scores",
-                            "example": "Show me Arsenal results today",
-                        },
-                        {
-                            "number": "3",
-                            "label": "📅 View upcoming fixtures",
-                            "example": "What matches are available?",
-                        },
+                        {"number": "1", "label": "BTTS", "example": "BTTS picks from Premier League"},
+                        {"number": "2", "label": "Over 2.5", "example": "Over 2.5 picks from La Liga"},
+                        {"number": "3", "label": "Double Chance", "example": "DC picks from Serie A"},
+                        {"number": "4", "label": "1X2", "example": "1X2 picks from Bundesliga"},
                     ],
                     follow_up_context=None,
                 )
