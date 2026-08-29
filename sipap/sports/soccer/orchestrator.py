@@ -1502,22 +1502,23 @@ Focus on your specialized analysis approach based on your role.
             Ensemble prediction dictionary
         """
         # Weighted average ensemble
-        # When all 3 agents: statistical=40%, form=40%, news=20%
-        # When news disabled: statistical=50%, form=50% (news weight redistributed)
+        # When all 3 agents: statistical=32%, form=48%, news=20%
+        # When news disabled: statistical=40%, form=60%
+        # Form agent weighted higher due to recency bias in sports predictions
         present_agents = {p["agent"] for p in agent_predictions}
 
         if "news" in present_agents:
-            # Full 3-agent ensemble
+            # Full 3-agent ensemble (form/statistical split 60/40 of remaining 80%)
             weights = {
-                "statistical": 0.40,
-                "form": 0.40,
+                "statistical": 0.32,
+                "form": 0.48,
                 "news": 0.20,
             }
         else:
-            # News disabled - redistribute weight to statistical and form
+            # News disabled - form=60%, statistical=40%
             weights = {
-                "statistical": 0.50,
-                "form": 0.50,
+                "statistical": 0.40,
+                "form": 0.60,
             }
 
         # Extract probabilities and calculate weighted average
