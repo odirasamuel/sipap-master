@@ -67,7 +67,11 @@ MARKET_1X2 = Market(
     outcomes=["Home Win", "Draw", "Away Win"],
     category=MarketCategory.MAIN,
     description="Full-time match result",
-    aliases=["match result", "full time result", "winner", "match winner"],
+    aliases=[
+        "match result", "full time result", "winner", "match winner",
+        "who wins", "ft result", "final result", "moneyline", "home win",
+        "away win", "draw", "1x2 prediction", "match outcome",
+    ],
 )
 
 MARKET_DNB = Market(
@@ -76,7 +80,10 @@ MARKET_DNB = Market(
     outcomes=["Home Win", "Away Win"],
     category=MarketCategory.MAIN,
     description="Match result with draw refunded",
-    aliases=["draw no bet"],
+    aliases=[
+        "draw no bet", "dnb", "no draw bet", "draw refund",
+        "win or money back", "home or away only",
+    ],
 )
 
 MARKET_BTTS = Market(
@@ -85,7 +92,11 @@ MARKET_BTTS = Market(
     outcomes=["Yes", "No"],
     category=MarketCategory.MAIN,
     description="Both teams score at least one goal",
-    aliases=["both teams to score", "gg/ng", "gg", "btts", "both score"],
+    aliases=[
+        "both teams to score", "both teams score", "btts", "gg", "gg/ng",
+        "both score", "both to score", "goals on both sides", "both sides score",
+        "goals both", "goal goal", "bts", "both scoring", "each team scores",
+    ],
 )
 
 MARKET_DC = Market(
@@ -94,7 +105,10 @@ MARKET_DC = Market(
     outcomes=["1X", "12", "X2"],
     category=MarketCategory.MAIN,
     description="Bet on two outcomes (1X=Home/Draw, 12=Home/Away, X2=Draw/Away)",
-    aliases=["double chance"],
+    aliases=[
+        "double chance", "dc", "home or draw", "away or draw", "no draw",
+        "home draw", "draw away", "two outcomes", "safe bet", "1x", "x2", "12",
+    ],
 )
 
 # Total Goals Markets
@@ -104,7 +118,10 @@ MARKET_OU05 = Market(
     outcomes=["Over 0.5", "Under 0.5"],
     category=MarketCategory.MAIN,
     description="More than 1 goal or 0 goals (Over 0.5 = at least 1 goal)",
-    aliases=["over 0.5", "under 0.5", "over under 0.5"],
+    aliases=[
+        "over 0.5", "under 0.5", "over under 0.5", "o0.5", "u0.5",
+        "at least 1 goal", "goals over 0.5", "ou 0.5",
+    ],
 )
 
 MARKET_OU15 = Market(
@@ -113,7 +130,10 @@ MARKET_OU15 = Market(
     outcomes=["Over 1.5", "Under 1.5"],
     category=MarketCategory.MAIN,
     description="More than 2 goals or less than 2 goals (Over 1.5 = at least 2 goals)",
-    aliases=["over 1.5", "under 1.5", "over under 1.5"],
+    aliases=[
+        "over 1.5", "under 1.5", "over under 1.5", "o1.5", "u1.5",
+        "at least 2 goals", "more than 1 goal", "goals over 1.5", "ou 1.5",
+    ],
 )
 
 MARKET_OU25 = Market(
@@ -122,7 +142,11 @@ MARKET_OU25 = Market(
     outcomes=["Over 2.5", "Under 2.5"],
     category=MarketCategory.MAIN,
     description="More than 3 goals or less than 3 goals (Over 2.5 = at least 3 goals)",
-    aliases=["over 2.5", "under 2.5", "over under 2.5", "o2.5", "u2.5"],
+    aliases=[
+        "over 2.5", "under 2.5", "over under 2.5", "o2.5", "u2.5",
+        "over 2.5 goals", "more than 2 goals", "less than 3 goals",
+        "goals over 2.5", "at least 3 goals", "ou 2.5", "total goals",
+    ],
 )
 
 MARKET_OU35 = Market(
@@ -131,7 +155,10 @@ MARKET_OU35 = Market(
     outcomes=["Over 3.5", "Under 3.5"],
     category=MarketCategory.MAIN,
     description="More than 4 goals or less than 4 goals (Over 3.5 = at least 4 goals)",
-    aliases=["over 3.5", "under 3.5", "over under 3.5"],
+    aliases=[
+        "over 3.5", "under 3.5", "over under 3.5", "o3.5", "u3.5",
+        "more than 3 goals", "goals over 3.5", "ou 3.5",
+    ],
 )
 
 MARKET_OU45 = Market(
@@ -140,7 +167,10 @@ MARKET_OU45 = Market(
     outcomes=["Over 4.5", "Under 4.5"],
     category=MarketCategory.MAIN,
     description="More than 5 goals or less than 5 goals (Over 4.5 = at least 5 goals)",
-    aliases=["over 4.5", "under 4.5", "over under 4.5"],
+    aliases=[
+        "over 4.5", "under 4.5", "over under 4.5", "o4.5", "u4.5",
+        "more than 4 goals", "goals over 4.5", "ou 4.5",
+    ],
 )
 
 # Half-Time Markets
@@ -284,7 +314,11 @@ MARKET_1X2_BTTS = Market(
     outcomes=["1&GG", "1&NG", "X&GG", "X&NG", "2&GG", "2&NG"],
     category=MarketCategory.COMBINATIONS,
     description="Match result combined with both teams to score (GG=Yes, NG=No)",
-    aliases=["1x2 and btts", "result and both teams to score", "1x2 and gg/ng"],
+    aliases=[
+        "1x2 and btts", "result and both teams to score", "1x2 and gg/ng",
+        "winner and btts", "match result and both teams score", "win and both score",
+        "result btts", "winner btts combo",
+    ],
 )
 
 # Combination Markets (Double Chance & Totals)
@@ -332,7 +366,11 @@ MARKET_BTTS_OU25 = Market(
     outcomes=["GG+Over", "GG+Under", "NG+Over", "NG+Under"],
     category=MarketCategory.COMBINATIONS,
     description="Both teams score AND over/under 2.5 goals (BOTH conditions must be true)",
-    aliases=["btts and over under 2.5", "gg/ng and total 2.5", "gg/ng total 2.5"],
+    aliases=[
+        "btts and over under 2.5", "gg/ng and total 2.5", "gg/ng total 2.5",
+        "btts and over 2.5", "both teams score and over 2.5", "gg and over 2.5",
+        "btts over 2.5", "btts o2.5", "gg over 2.5 combo",
+    ],
 )
 
 MARKET_BTTS_OU35 = Market(

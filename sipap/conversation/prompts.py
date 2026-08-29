@@ -114,9 +114,21 @@ Your job is to parse user queries into structured intents for sports betting int
 - This means ACCUMULATED ODDS (sum of bookmaker odds), not match count
 - Example: "20 odds" = accumulate fixtures until odds sum >= 20
 
-### Market Codes
-- Explicit codes: "BTTS", "1X2", "OU2.5", "DC", "DNB"
-- Natural language aliases:
+### Market Codes (CRITICAL - 5 Market Limit)
+- **Batch predictions MUST specify markets** - Maximum 5 per request
+- **If no markets specified, set markets=null** (system will guide user)
+
+**Full Market List (44 total):**
+- Main: 1X2, DNB, BTTS, DC
+- Goals: OU0.5, OU1.5, OU2.5, OU3.5, OU4.5
+- Half-Time: HT_1X2, HT_DC, HT_OU0.5, HT_OU1.5, HT_OU2.5, HT/FT
+- 2nd Half: 2H_DC, 2H_OU0.5, 2H_OU1.5, 2H_OU2.5
+- Team: HOME_SCORE, AWAY_SCORE, HOME_WIN_HALF, AWAY_WIN_HALF, HOME_TO_SCORE, AWAY_TO_SCORE
+- Combos (AND): 1X2_OU1.5, 1X2_OU2.5, 1X2_OU3.5, 1X2_OU4.5, 1X2_BTTS, DC_OU1.5, DC_OU2.5, DC_OU3.5, DC_BTTS, BTTS_OU2.5, BTTS_OU3.5
+- Chance Mix (OR): CHANCEMIX_1X2_OU15, CHANCEMIX_1X2_OU25, CHANCEMIX_1X2_OU35, CHANCEMIX_1X2_BTTS, CHANCEMIX_BTTS_OU15, CHANCEMIX_BTTS_OU25, CHANCEMIX_BTTS_OU35
+- Advanced: MULTI_GOAL
+
+**Natural language aliases:**
   - "both teams to score", "both score", "gg" -> "BTTS"
   - "match result", "winner", "home win", "away win" -> "1X2"
   - "double chance" -> "DC"
@@ -125,11 +137,20 @@ Your job is to parse user queries into structured intents for sports betting int
   - "over 1.5", "under 1.5" -> "OU1.5"
   - "over 3.5", "under 3.5" -> "OU3.5"
 - Multiple markets: "BTTS and over 2.5" -> ["BTTS", "OU2.5"]
-- If user ONLY mentions quality ("sure odds") WITHOUT markets, set markets=null (system decides)
+
+**CRITICAL RULE:**
+- If user says vague things like "sure odds", "good bets" WITHOUT specific markets -> set markets=null
+- Examples that should have markets=null:
+  - "I need 10 sure odds" -> markets=null (no market specified)
+  - "Give me good bets from England" -> markets=null (no market specified)
+  - "Best predictions today" -> markets=null (no market specified)
+- Examples with markets:
+  - "BTTS picks from La Liga" -> markets=["BTTS"]
+  - "1X2 and BTTS for Premier League" -> markets=["1X2", "BTTS"]
 
 ## EXAMPLE QUERIES AND EXPECTED OUTPUT
 
-### Example 1: Batch Prediction
+### Example 1: Batch Prediction (No Markets = Guidance Needed)
 Query: "I need 20 sure odds in Premier League"
 Output:
 {
@@ -139,7 +160,20 @@ Output:
     "target_odds": 20,
     "markets": null,
     "date_range": {"start": "2026-08-20", "end": "2026-08-20"},
-    "reasoning": "User wants accumulated odds of 20 from Premier League, quality = sure"
+    "reasoning": "User wants odds but didn't specify markets - system will ask for market specification"
+}
+
+### Example 1b: Batch Prediction (With Markets = Valid)
+Query: "Give me BTTS and Over 2.5 picks from Premier League"
+Output:
+{
+    "intent_type": "batch_prediction",
+    "confidence": 0.95,
+    "leagues": ["Premier League"],
+    "target_odds": null,
+    "markets": ["BTTS", "OU2.5"],
+    "date_range": {"start": "2026-08-20", "end": "2026-08-20"},
+    "reasoning": "User specified BTTS and Over 2.5 markets - valid request"
 }
 
 ### Example 2: Show Fixtures

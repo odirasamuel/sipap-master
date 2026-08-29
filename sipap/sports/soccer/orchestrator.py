@@ -15,6 +15,7 @@ from collections import Counter
 from datetime import datetime
 from typing import Any
 
+from sipap_common.cache.redis_adapter import RedisCache
 from sipap_common.database.manager import DatabaseManager
 from sipap_common.exceptions import DatabaseError, MCPError
 from sipap_common.utils.retry import retry_with_backoff
@@ -144,8 +145,57 @@ class SoccerOrchestrator:
         # Will be properly initialized when data MCP is created
         self._market_evaluator: MarketEvaluator | None = None
 
+        # Initialize Redis cache for prediction results
+        # Cache key pattern: prediction:{fixture_id}:{market_code}:{date}
+        # Shared with MainOrchestrator and BatchOrchestrator for consistency
+        redis_host = os.environ.get("REDIS_HOST", "localhost")
+        redis_port = int(os.environ.get("REDIS_PORT", "6379"))
+        redis_password = os.environ.get("REDIS_PASSWORD", None)
+
+        try:
+            self.cache = RedisCache(
+                host=redis_host,
+                port=redis_port,
+                password=redis_password,
+                default_ttl=3600,  # 1 hour default (actual TTL calculated per-day)
+            )
+            self.cache_enabled = True
+            self.logger.info(
+                f"Redis cache initialized for predictions (host: {redis_host}:{redis_port})"
+            )
+        except Exception as e:
+            self.logger.warning(
+                f"Failed to initialize Redis cache - predictions will not be cached: {e}"
+            )
+            self.cache = None
+            self.cache_enabled = False
+
         log_mode = "DEBUG mode enabled" if self.debug_enabled else "INFO mode (summary only)"
         self.logger.info(f"SoccerOrchestrator initialized - {log_mode}")
+
+    def _calculate_ttl_until_end_of_day(self) -> int:
+        """Calculate TTL in seconds until end of current day.
+
+        Predictions are valid for the current day only, so we cache
+        until midnight UTC. This ensures:
+        1. Fresh predictions each day
+        2. Consistent predictions within the same day
+        3. No stale data carried over
+
+        Returns:
+            TTL in seconds (minimum 60 seconds to avoid near-zero TTL issues)
+        """
+        from datetime import UTC, timedelta
+
+        now = datetime.now(UTC)
+        end_of_day = now.replace(hour=23, minute=59, second=59, microsecond=0)
+
+        if now >= end_of_day:
+            # If it's already close to midnight, extend to next day
+            end_of_day = end_of_day + timedelta(days=1)
+
+        ttl_seconds = int((end_of_day - now).total_seconds())
+        return max(ttl_seconds, 60)  # Minimum 60 seconds
 
     @retry_with_backoff(
         max_attempts=3,
@@ -2154,13 +2204,65 @@ Focus on your specialized analysis approach based on your role.
             )
 
             try:
-                # Evaluate only the filtered markets for this fixture
-                evaluations = await self._market_evaluator.evaluate_all_markets(
-                    home_team_id=int(home_team_external_id),
-                    away_team_id=int(away_team_external_id),
-                    league_id=int(league_external_id),
-                    market_codes=market_codes,
-                )
+                # For each market, check cache first before evaluating
+                from datetime import date as date_module
+                current_date = date_module.today().isoformat()
+
+                evaluations_to_process = []
+
+                for market_code in market_codes:
+                    cache_key = f"prediction:{fixture_id}:{market_code}:{current_date}"
+
+                    # Check cache first
+                    if self.cache_enabled:
+                        try:
+                            cached_result = self.cache.get(cache_key)
+                            if cached_result:
+                                cached_outcome = cached_result.get('best_outcome', 'Unknown')
+                                cached_prob = cached_result.get('probability', 0.0)
+
+                                if cached_outcome != 'Unknown' and cached_prob > 0.0:
+                                    # Use cached result
+                                    if cached_prob >= min_probability:
+                                        all_selections.append({
+                                            "fixture_id": str(fixture_id),
+                                            "external_id": int(external_id),
+                                            "fixture": {
+                                                "home_team": home_team_name,
+                                                "away_team": away_team_name,
+                                                "id": str(fixture_id),
+                                                "league": fixture.get("league_name", fixture.get("league", "Unknown")),
+                                            },
+                                            "scheduled_at": fixture.get("scheduled_at"),
+                                            "league": fixture.get("league_name", fixture.get("league", "Unknown")),
+                                            "market_code": market_code,
+                                            "market_name": cached_result.get('market_name', market_code),
+                                            "outcome": cached_outcome,
+                                            "probability": cached_prob,
+                                            "confidence": cached_result.get('confidence', 0.0),
+                                            "odds": cached_result.get('bookmaker_odd', 0.0),
+                                            "bookmaker": cached_result.get('bookmaker', ''),
+                                        })
+                                    if self.debug_enabled:
+                                        self.logger.debug(f"  {market_code}: CACHE HIT - {cached_outcome}")
+                                    continue
+                        except Exception as e:
+                            if self.debug_enabled:
+                                self.logger.debug(f"Cache read failed for {cache_key}: {e}")
+
+                    # Cache miss - need to evaluate this market
+                    evaluations_to_process.append(market_code)
+
+                # Evaluate only uncached markets
+                if evaluations_to_process:
+                    evaluations = await self._market_evaluator.evaluate_all_markets(
+                        home_team_id=int(home_team_external_id),
+                        away_team_id=int(away_team_external_id),
+                        league_id=int(league_external_id),
+                        market_codes=evaluations_to_process,
+                    )
+                else:
+                    evaluations = []
 
                 # Add all evaluations meeting the probability threshold
                 for evaluation in evaluations:
@@ -2186,7 +2288,7 @@ Focus on your specialized analysis approach based on your role.
                             except Exception as e:
                                 self.logger.debug(f"Failed to fetch odds: {e}")
 
-                        all_selections.append({
+                        selection_data = {
                             "fixture_id": str(fixture_id),
                             "external_id": int(external_id),
                             "fixture": {
@@ -2204,7 +2306,29 @@ Focus on your specialized analysis approach based on your role.
                             "confidence": evaluation.best_outcome.confidence,
                             "odds": odds_value,
                             "bookmaker": bookmaker_name,
-                        })
+                        }
+                        all_selections.append(selection_data)
+
+                        # Cache the result for future requests
+                        if self.cache_enabled:
+                            try:
+                                cache_key = f"prediction:{fixture_id}:{evaluation.market_code}:{current_date}"
+                                cache_data = {
+                                    "best_outcome": evaluation.best_outcome.outcome_code,
+                                    "probability": evaluation.best_outcome.weighted_probability,
+                                    "confidence": evaluation.best_outcome.confidence,
+                                    "bookmaker_odd": odds_value,
+                                    "bookmaker": bookmaker_name,
+                                    "market_name": evaluation.market_name,
+                                    "market_code": evaluation.market_code,
+                                }
+                                ttl = self._calculate_ttl_until_end_of_day()
+                                self.cache.set(cache_key, cache_data, ttl=ttl)
+                                if self.debug_enabled:
+                                    self.logger.debug(f"  {evaluation.market_code}: CACHED (TTL={ttl}s)")
+                            except Exception as e:
+                                if self.debug_enabled:
+                                    self.logger.debug(f"Cache write failed: {e}")
 
                 # Log progress after successful evaluation
                 self.logger.info(

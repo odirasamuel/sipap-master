@@ -679,6 +679,31 @@ class MainOrchestrator:
             self.conversation_manager.add_assistant_message(user_id, response["message"])
             return response
 
+        # Step 3.6: Check if batch prediction needs market specification
+        # This prevents evaluating ALL 44 markets per fixture (which takes ~14 hours)
+        if intent.needs_market_specification:
+            self.logger.info(
+                "Batch prediction needs market specification - sending guidance",
+                extra={
+                    "user_id": user_id,
+                    "markets": intent.markets,
+                    "guidance_length": len(intent.guidance_message) if intent.guidance_message else 0,
+                },
+            )
+
+            response = {
+                "message": intent.guidance_message or "Please specify which markets you want.",
+                "intent": "needs_market_specification",
+                "data": {
+                    "original_intent": intent.intent_type,
+                    "suggested_markets": intent.markets,  # May contain first 5 if too many
+                },
+                "error": None,
+            }
+
+            self.conversation_manager.add_assistant_message(user_id, response["message"])
+            return response
+
         # Step 4: Route based on intent_type
         if intent.intent_type == "batch_prediction":
             # Phase 2B: Batch prediction with accumulated odds (not yet implemented)

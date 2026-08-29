@@ -127,10 +127,12 @@ class TestBatchPredictionIntegration:
         assert "Market: Both Teams To Score (BTTS)" in response["message"]
         assert "Market: Total Goals Over/Under 2.5 (OU2.5)" in response["message"]
 
+    @NEEDS_AWS_BEDROCK
     @pytest.mark.asyncio
     async def test_handle_user_message_batch_prediction_with_filters(self, orchestrator):
         """Test batch prediction with league and date filters."""
-        message = "Give me 30 odds in Premier League and LaLiga between Aug 3-10"
+        # Include markets (1X2, BTTS) to pass market validation
+        message = "Give me 30 1X2 and BTTS odds in Premier League and LaLiga between Aug 3-10"
         user_id = "test_user_456"
 
         # Mock successful result with filters
@@ -182,10 +184,12 @@ class TestBatchPredictionIntegration:
         assert "2026-08-03" in response["message"]
         assert "2026-08-10" in response["message"]
 
+    @NEEDS_AWS_BEDROCK
     @pytest.mark.asyncio
     async def test_handle_user_message_batch_prediction_warning(self, orchestrator):
         """Test batch prediction that doesn't reach target (warning)."""
-        message = "I need 50 sure odds"
+        # Include market (1X2) to pass market validation
+        message = "I need 50 1X2 sure odds"
         user_id = "test_user_789"
 
         # Mock result with warning (target not reached)
@@ -234,10 +238,12 @@ class TestBatchPredictionIntegration:
         assert "15.5 odds" in response["message"]
         assert response["data"]["warning"] is not None
 
+    @NEEDS_AWS_BEDROCK
     @pytest.mark.asyncio
     async def test_handle_user_message_batch_prediction_error(self, orchestrator):
         """Test batch prediction with error (no fixtures found)."""
-        message = "Give me 20 odds in NonExistentLeague"
+        # Include market (BTTS) to pass market validation
+        message = "Give me 20 BTTS odds in NonExistentLeague"
         user_id = "test_user_error"
 
         # Mock error result

@@ -22,6 +22,33 @@ from sipap.conversation.intent_parser import Intent, IntentParser
 from sipap_common.logging import get_logger
 
 
+# Maximum markets allowed per batch prediction request
+# Users must specify which markets they want to avoid evaluating all 44 markets
+MAX_MARKETS_PER_REQUEST = 5
+
+# Guidance message for users who don't specify markets
+MARKET_GUIDANCE_MESSAGE = """Please specify which markets you want predictions for (max 5 per request).
+
+*Popular Markets:*
+• Match Winner (1X2)
+• Both Teams to Score (BTTS)
+• Over/Under 2.5 Goals (OU2.5)
+• Double Chance (DC)
+• Draw No Bet (DNB)
+
+*Combination Markets:*
+• BTTS + Over 2.5
+• Winner + BTTS
+• Chance Mix
+
+*Example requests:*
+"BTTS and Over 2.5 for Premier League"
+"Match winner, DC and DNB for La Liga today"
+"Give me 1X2 and BTTS predictions for Spain"
+
+What markets would you like?"""
+
+
 class LeagueEntity(BaseModel):
     """Structured league entity with API-Football ID for unambiguous resolution.
 
@@ -108,6 +135,10 @@ class RequestIntent(BaseModel):
     # Context
     original_query: str
     extracted_entities: dict[str, Any] = Field(default_factory=dict)
+
+    # Guidance for incomplete batch prediction requests
+    needs_market_specification: bool = False  # True when user must specify markets
+    guidance_message: str | None = None  # Message to send when request needs clarification
 
     model_config = ConfigDict(frozen=False)  # Allow modifications for context resolution
 
@@ -200,7 +231,8 @@ class NLUAgent:
                     f"Claude NLU parsed: {claude_intent.intent_type} "
                     f"(confidence: {claude_intent.confidence:.2f})"
                 )
-                return claude_intent
+                # Validate batch prediction markets before returning
+                return self._validate_batch_markets(claude_intent)
 
             self.logger.warning(
                 f"Claude NLU low confidence: {claude_intent.confidence:.2f}, trying regex fallback"
@@ -220,7 +252,8 @@ class NLUAgent:
                 f"Regex parser used as fallback: {regex_intent.intent_type} "
                 f"(confidence: {regex_intent.confidence:.2f})"
             )
-            return regex_intent
+            # Validate batch prediction markets before returning
+            return self._validate_batch_markets(regex_intent)
 
         except Exception as e:
             self.logger.error(f"Regex parser also failed: {e}")
@@ -287,6 +320,92 @@ class NLUAgent:
                     return True
 
         return False
+
+    def _validate_batch_markets(self, intent: RequestIntent) -> RequestIntent:
+        """Validate market specification for batch prediction requests.
+
+        For batch predictions, users MUST specify which markets they want to avoid
+        evaluating all 44 markets per fixture (which takes ~14 hours).
+
+        Rules:
+        1. Users must specify at least one market
+        2. Maximum 5 markets per request
+        3. If rules violated, return intent with guidance message
+
+        Args:
+            intent: Parsed RequestIntent to validate
+
+        Returns:
+            RequestIntent with needs_market_specification=True and guidance_message
+            if validation fails, otherwise the original intent
+        """
+        # Only validate batch_prediction intents
+        if intent.intent_type != "batch_prediction":
+            return intent
+
+        # Case 1: No markets specified - need clarification
+        if intent.markets is None or len(intent.markets) == 0:
+            self.logger.info(
+                "Batch prediction missing market specification - requesting clarification",
+                extra={"original_query": intent.original_query[:50]},
+            )
+            return RequestIntent(
+                intent_type=intent.intent_type,
+                confidence=intent.confidence,
+                target_odds=intent.target_odds,
+                accumulation_mode=intent.accumulation_mode,
+                num_matches=intent.num_matches,
+                leagues=intent.leagues,
+                date_range=intent.date_range,
+                markets=None,
+                quality_threshold=intent.quality_threshold,
+                sort_by=intent.sort_by,
+                home_team=intent.home_team,
+                away_team=intent.away_team,
+                match_id=intent.match_id,
+                original_query=intent.original_query,
+                extracted_entities=intent.extracted_entities,
+                needs_market_specification=True,
+                guidance_message=MARKET_GUIDANCE_MESSAGE,
+            )
+
+        # Case 2: Too many markets - limit to 5 and provide guidance
+        if len(intent.markets) > MAX_MARKETS_PER_REQUEST:
+            suggested = intent.markets[:MAX_MARKETS_PER_REQUEST]
+            self.logger.info(
+                f"Batch prediction has too many markets ({len(intent.markets)}) - limiting to {MAX_MARKETS_PER_REQUEST}",
+                extra={"markets": intent.markets, "suggested": suggested},
+            )
+            return RequestIntent(
+                intent_type=intent.intent_type,
+                confidence=intent.confidence,
+                target_odds=intent.target_odds,
+                accumulation_mode=intent.accumulation_mode,
+                num_matches=intent.num_matches,
+                leagues=intent.leagues,
+                date_range=intent.date_range,
+                markets=suggested,  # First 5 as suggestion
+                quality_threshold=intent.quality_threshold,
+                sort_by=intent.sort_by,
+                home_team=intent.home_team,
+                away_team=intent.away_team,
+                match_id=intent.match_id,
+                original_query=intent.original_query,
+                extracted_entities=intent.extracted_entities,
+                needs_market_specification=True,
+                guidance_message=(
+                    f"Please limit to {MAX_MARKETS_PER_REQUEST} markets per request. "
+                    f"You requested {len(intent.markets)} markets.\n\n"
+                    f"Suggested: {', '.join(suggested)}\n\n"
+                    f"Send another message with additional markets if needed."
+                ),
+            )
+
+        # Valid: 1-5 markets specified
+        self.logger.debug(
+            f"Batch prediction has valid market specification: {intent.markets}"
+        )
+        return intent
 
     async def generate_clarification(
         self,
