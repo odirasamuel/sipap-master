@@ -45,12 +45,15 @@ COUNTRY_PHONE_CODES: dict[str, tuple[str, str, str]] = {
     "237": ("Cameroon", "XAF", "FCFA"),
 }
 
-# Base pricing in USD (source of truth)
+# Base price per week in USD (source of truth)
+PRICE_PER_WEEK_USD: float = 2.00
+
+# Calculated pricing (dynamically computed from base price)
 BASE_PRICING_USD: dict[str, float] = {
-    "1_week": 2.00,
-    "2_weeks": 3.50,
-    "3_weeks": 5.00,
-    "4_weeks": 6.50,
+    "1_week": PRICE_PER_WEEK_USD * 1,
+    "2_weeks": PRICE_PER_WEEK_USD * 2,
+    "3_weeks": PRICE_PER_WEEK_USD * 3,
+    "4_weeks": PRICE_PER_WEEK_USD * 4,
 }
 
 # Currencies with no decimal places (large value currencies)
