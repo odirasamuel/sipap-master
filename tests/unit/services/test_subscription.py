@@ -18,6 +18,35 @@ from sipap.services.subscription import (
 )
 
 
+class TestPhoneNumberDetection:
+    """Tests for phone number vs UUID detection helpers."""
+
+    def test_is_phone_number_with_plus_prefix(self):
+        """Phone numbers starting with + should be detected."""
+        assert SubscriptionService._is_phone_number("+2347025761599") is True
+        assert SubscriptionService._is_phone_number("+14155551234") is True
+        assert SubscriptionService._is_phone_number("+447911123456") is True
+
+    def test_is_phone_number_without_plus_prefix(self):
+        """UUIDs and other IDs should not be detected as phone numbers."""
+        assert SubscriptionService._is_phone_number("550e8400-e29b-41d4-a716-446655440000") is False
+        assert SubscriptionService._is_phone_number("user_123") is False
+        assert SubscriptionService._is_phone_number("abc123") is False
+
+    def test_build_where_clause_for_phone_number(self):
+        """Phone numbers should generate phone_number WHERE clause."""
+        clause, params = SubscriptionService._build_user_where_clause("+2347025761599")
+        assert clause == "phone_number = :user_id"
+        assert params == {"user_id": "+2347025761599"}
+
+    def test_build_where_clause_for_uuid(self):
+        """UUIDs should generate id WHERE clause."""
+        uuid = "550e8400-e29b-41d4-a716-446655440000"
+        clause, params = SubscriptionService._build_user_where_clause(uuid)
+        assert clause == "id = :user_id"
+        assert params == {"user_id": uuid}
+
+
 class TestSubscriptionService:
     """Test suite for SubscriptionService."""
 

@@ -103,6 +103,30 @@ class SubscriptionService:
         ...     return {"error": msg}
     """
 
+    @staticmethod
+    def _is_phone_number(user_id: str) -> bool:
+        """Check if user_id is a phone number (starts with +)."""
+        return user_id.startswith("+")
+
+    @staticmethod
+    def _build_user_where_clause(user_id: str) -> tuple[str, dict]:
+        """Build WHERE clause based on user_id format.
+
+        Phone numbers (starting with +) should only compare to phone_number column.
+        UUIDs should only compare to id column.
+        This prevents PostgreSQL type comparison errors.
+
+        Args:
+            user_id: User ID (phone number or UUID)
+
+        Returns:
+            Tuple of (where_clause, params_dict)
+        """
+        if SubscriptionService._is_phone_number(user_id):
+            return ("phone_number = :user_id", {"user_id": user_id})
+        else:
+            return ("id = :user_id", {"user_id": user_id})
+
     def __init__(self, db: DatabaseManager | None = None) -> None:
         """Initialize subscription service.
 
@@ -185,7 +209,9 @@ class SubscriptionService:
 
         try:
             # Query users table (trial_used_at tracks when the one free request was used)
-            sql = """
+            # Use appropriate WHERE clause based on user_id format (phone vs UUID)
+            where_clause, params = self._build_user_where_clause(user_id)
+            sql = f"""
                 SELECT
                     id,
                     phone_number,
@@ -194,10 +220,10 @@ class SubscriptionService:
                     subscription_expires_at,
                     trial_used_at
                 FROM users
-                WHERE id = :user_id OR phone_number = :user_id
+                WHERE {where_clause}
                 LIMIT 1
             """
-            results = self.db.execute_raw_sql(sql, {"user_id": user_id})
+            results = self.db.execute_raw_sql(sql, params)
 
             if not results:
                 # New user - treat as trial (not used yet)
@@ -401,13 +427,16 @@ class SubscriptionService:
 
             # Update trial_used_at in database
             # Use COALESCE to only set if not already set (idempotent)
-            update_sql = """
+            # Use appropriate WHERE clause based on user_id format (phone vs UUID)
+            where_clause, params = self._build_user_where_clause(user_id)
+            params["now"] = now
+            update_sql = f"""
                 UPDATE users
                 SET trial_used_at = COALESCE(trial_used_at, :now),
                     updated_at = :now
-                WHERE id = :user_id OR phone_number = :user_id
+                WHERE {where_clause}
             """
-            self.db.execute_raw_sql(update_sql, {"user_id": user_id, "now": now})
+            self.db.execute_raw_sql(update_sql, params)
             logger.info(f"Marked trial as used for user {user_id}")
             return True
 
@@ -546,16 +575,16 @@ class SubscriptionService:
                 }
 
             # Cancel the subscription
-            update_sql = """
+            # Use appropriate WHERE clause based on user_id format (phone vs UUID)
+            where_clause, params = self._build_user_where_clause(user_id)
+            params["now"] = datetime.now(UTC)
+            update_sql = f"""
                 UPDATE users
                 SET subscription_status = 'cancelled',
                     updated_at = :now
-                WHERE id = :user_id OR phone_number = :user_id
+                WHERE {where_clause}
             """
-            self.db.execute_raw_sql(
-                update_sql,
-                {"user_id": user_id, "now": datetime.now(UTC)},
-            )
+            self.db.execute_raw_sql(update_sql, params)
 
             expires_at = info["subscription_expires_at"]
             expires_str = (
