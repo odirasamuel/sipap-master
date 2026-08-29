@@ -8,7 +8,10 @@ to sport-specific orchestrators (SoccerOrchestrator, BasketballOrchestrator, etc
 
 import logging
 import os
+from datetime import UTC, date, datetime
 from typing import Any
+
+from sipap_common.cache.redis_adapter import RedisCache
 
 from sipap.conversation import ConversationManager, NLUAgent, RequestIntent
 from sipap.conversation.nlu_agent import ClarificationResponse
@@ -47,6 +50,31 @@ class MainOrchestrator:
 
         # Check if DEBUG logging is enabled
         self.debug_enabled = self.logger.isEnabledFor(logging.DEBUG)
+
+        # Initialize Redis cache for prediction results
+        # Cache key pattern: prediction:{fixture_id}:{market_code}:{date}
+        # This shares cache with BatchOrchestrator for consistency
+        redis_host = os.environ.get("REDIS_HOST", "localhost")
+        redis_port = int(os.environ.get("REDIS_PORT", "6379"))
+        redis_password = os.environ.get("REDIS_PASSWORD", None)
+
+        try:
+            self.cache = RedisCache(
+                host=redis_host,
+                port=redis_port,
+                password=redis_password,
+                default_ttl=3600,  # 1 hour default (actual TTL until end of day)
+            )
+            self.cache_enabled = True
+            self.logger.info(
+                f"Redis cache initialized for predictions (host: {redis_host}:{redis_port})"
+            )
+        except Exception as e:
+            self.logger.warning(
+                f"Failed to initialize Redis cache - predictions will not be cached: {e}"
+            )
+            self.cache = None
+            self.cache_enabled = False
 
         # Initialize conversation manager for multi-turn conversations
         self.conversation_manager = ConversationManager(logger=self.logger)
@@ -182,6 +210,42 @@ class MainOrchestrator:
                 "validation": validation,
             }
 
+        # Step 2.5: Check prediction cache (BEFORE running expensive agents)
+        # Cache key: prediction:{fixture_id}:{market}:{date}
+        # Shared with BatchOrchestrator for consistency
+        current_date = date.today().isoformat()
+        cache_key = f"prediction:{resolved_match_id}:{market}:{current_date}"
+
+        if self.cache_enabled:
+            try:
+                cached_result = self.cache.get(cache_key)
+                if cached_result:
+                    # Validate cached result - skip invalid predictions
+                    cached_outcome = cached_result.get('best_outcome', 'Unknown')
+                    cached_prob = cached_result.get('probability', 0.0)
+
+                    if cached_outcome != 'Unknown' and cached_prob > 0.0:
+                        self.logger.info(
+                            f"🎯 CACHE HIT: {cache_key} - {cached_outcome} "
+                            f"(prob={cached_prob:.2f})"
+                        )
+                        # Return formatted cached prediction
+                        return self._format_cached_prediction(
+                            cached_result, context, resolved_match_id, user_id
+                        )
+                    else:
+                        # Invalid cache entry - delete and re-evaluate
+                        self.logger.warning(
+                            f"🗑️ CACHE INVALID: {cache_key} (outcome={cached_outcome}, prob={cached_prob}) - re-evaluating"
+                        )
+                        try:
+                            self.cache.delete(cache_key)
+                        except Exception as del_e:
+                            self.logger.debug(f"Failed to delete invalid cache entry: {del_e}")
+            except Exception as e:
+                if self.debug_enabled:
+                    self.logger.debug(f"Cache read failed for {cache_key}: {e}")
+
         # Step 3: Run ensemble prediction with real AI agents
         if self.debug_enabled:
             self.logger.debug("Step 3: Running AI agent predictions")
@@ -231,6 +295,37 @@ class MainOrchestrator:
 
         # Add save result to prediction
         final_prediction["save_result"] = save_result
+
+        # Step 6.5: Cache successful prediction (for future requests)
+        # Only cache valid predictions (outcome != Unknown, probability > 0)
+        outcome = final_prediction.get("outcome", "Unknown")
+        probability = final_prediction.get("probability", 0.0)
+        is_valid_prediction = outcome != "Unknown" and probability > 0.0
+
+        if self.cache_enabled and is_valid_prediction:
+            try:
+                ttl = self._calculate_ttl_until_end_of_day()
+                cache_data = {
+                    "best_outcome": outcome,
+                    "probability": probability,
+                    "confidence": final_prediction.get("confidence", 0),
+                    "bookmaker_odd": final_prediction.get("expected_value", {}).get("odds", 0),
+                    "ev": final_prediction.get("expected_value", {}).get("expected_value", 0),
+                    "market_code": market,
+                    "recommendation": final_prediction.get("recommendation", ""),
+                    "quality_gate": final_prediction.get("quality_gate", ""),
+                }
+                self.cache.set(cache_key, cache_data, ttl=ttl)
+                self.logger.info(
+                    f"📝 CACHE SET: {cache_key} (TTL={ttl}s)"
+                )
+            except Exception as e:
+                if self.debug_enabled:
+                    self.logger.debug(f"Cache write failed for {cache_key}: {e}")
+        elif not is_valid_prediction:
+            self.logger.warning(
+                f"📭 NOT CACHED: Invalid prediction (outcome={outcome}, prob={probability})"
+            )
 
         self.logger.info(
             "Prediction complete",
@@ -1874,6 +1969,116 @@ class MainOrchestrator:
                 "data": None,
                 "error": None,  # Don't expose error to user
             }
+
+    def _calculate_ttl_until_end_of_day(self) -> int:
+        """
+        Calculate TTL in seconds until end of current day (midnight UTC).
+
+        Predictions are cached until end of day because:
+        - Odds and context can change during the day
+        - Same-day predictions should use consistent data
+        - Fresh predictions at midnight for next day's fixtures
+
+        Returns:
+            Number of seconds until 23:59:59 UTC today (minimum 60 seconds)
+
+        Examples:
+            >>> # At 2026-08-29 14:30:00 UTC
+            >>> ttl = self._calculate_ttl_until_end_of_day()
+            >>> # Returns ~34,200 seconds (9.5 hours remaining in day)
+        """
+        now = datetime.now(UTC)
+        end_of_day = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+        ttl_seconds = int((end_of_day - now).total_seconds())
+
+        # Ensure TTL is at least 60 seconds (avoid 0 or negative TTL)
+        return max(ttl_seconds, 60)
+
+    def _format_cached_prediction(
+        self,
+        cached: dict[str, Any],
+        context: dict[str, Any],
+        match_id: str,
+        user_id: str | None,
+    ) -> dict[str, Any]:
+        """
+        Format cached prediction for return, including conversation state updates.
+
+        Converts cached prediction data (from Redis) back to the standard
+        prediction response format that callers expect.
+
+        Args:
+            cached: Cached prediction data from Redis
+            context: Aggregated match context (for team names, etc.)
+            match_id: Resolved match identifier
+            user_id: User identifier for conversation tracking
+
+        Returns:
+            Formatted prediction dictionary matching predict() return structure
+
+        Note:
+            This method also updates conversation state just like a fresh
+            prediction would, ensuring consistent behavior for cache hits.
+        """
+        # Extract data from cache
+        outcome = cached.get("best_outcome", "Unknown")
+        probability = cached.get("probability", 0.0)
+        confidence = cached.get("confidence", 0.0)
+        market = cached.get("market_code", "1X2")
+
+        # Build prediction response matching predict() return format
+        final_prediction: dict[str, Any] = {
+            "outcome": outcome,
+            "probability": probability,
+            "confidence": confidence,
+            "recommendation": cached.get("recommendation", ""),
+            "quality_gate": cached.get("quality_gate", ""),
+            "expected_value": {
+                "odds": cached.get("bookmaker_odd", 0),
+                "expected_value": cached.get("ev", 0),
+            },
+            "cached": True,  # Flag to indicate this was a cache hit
+            "save_result": {"prediction_id": None, "cached": True},
+        }
+
+        # Update conversation state if user_id provided (same as fresh prediction)
+        if user_id:
+            home_team = context.get("home_team", {}).get("name", "Home")
+            away_team = context.get("away_team", {}).get("name", "Away")
+
+            # Ensure numeric types for formatting
+            try:
+                prob_display = float(probability) if probability else 0.0
+                conf_display = float(confidence) if confidence else 0.0
+                if prob_display > 1:
+                    prob_display = prob_display / 100
+                if conf_display > 1:
+                    conf_display = conf_display / 100
+            except (ValueError, TypeError):
+                prob_display, conf_display = 0.0, 0.0
+
+            assistant_message = (
+                f"Prediction for {home_team} vs {away_team}:\n"
+                f"Outcome: {outcome}\n"
+                f"Probability: {prob_display:.1%}\n"
+                f"Confidence: {conf_display:.1%}\n"
+                f"Recommendation: {cached.get('recommendation', '')}"
+            )
+
+            # Add assistant message to conversation
+            self.conversation_manager.add_assistant_message(user_id, assistant_message)
+
+            # Update conversation context
+            context_updates = {
+                "last_match_id": match_id,
+                "last_home_team": home_team,
+                "last_away_team": away_team,
+                "last_market": market,
+                "last_prediction_id": None,  # No DB record for cache hit
+            }
+            self.conversation_manager.update_context(user_id, context_updates)
+
+        return final_prediction
 
     def _mock_agent_predictions(self, market: str) -> list[dict[str, Any]]:
         """
