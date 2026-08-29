@@ -251,11 +251,13 @@ class SubscriptionService:
                 if datetime.now(UTC) > expires_at:
                     status = "expired"
                     # Update status in database
+                    # Use RETURNING to make execute_raw_sql work (it expects rows)
                     try:
                         update_sql = """
                             UPDATE users
                             SET subscription_status = 'expired'
                             WHERE id = :user_id
+                            RETURNING id
                         """
                         self.db.execute_raw_sql(update_sql, {"user_id": user_db_id})
                         logger.info(f"Updated expired subscription for user {user_id}")
@@ -428,6 +430,7 @@ class SubscriptionService:
             # Update trial_used_at in database
             # Use COALESCE to only set if not already set (idempotent)
             # Use appropriate WHERE clause based on user_id format (phone vs UUID)
+            # Use RETURNING to make execute_raw_sql work (it expects rows)
             where_clause, params = self._build_user_where_clause(user_id)
             params["now"] = now
             update_sql = f"""
@@ -435,10 +438,15 @@ class SubscriptionService:
                 SET trial_used_at = COALESCE(trial_used_at, :now),
                     updated_at = :now
                 WHERE {where_clause}
+                RETURNING id
             """
-            self.db.execute_raw_sql(update_sql, params)
-            logger.info(f"Marked trial as used for user {user_id}")
-            return True
+            results = self.db.execute_raw_sql(update_sql, params)
+            if results:
+                logger.info(f"Marked trial as used for user {user_id}")
+                return True
+            else:
+                logger.warning(f"No user found to mark trial as used: {user_id}")
+                return False
 
         except Exception as e:
             logger.error(f"Error marking trial as used for {user_id}: {e}")
@@ -576,6 +584,7 @@ class SubscriptionService:
 
             # Cancel the subscription
             # Use appropriate WHERE clause based on user_id format (phone vs UUID)
+            # Use RETURNING to make execute_raw_sql work (it expects rows)
             where_clause, params = self._build_user_where_clause(user_id)
             params["now"] = datetime.now(UTC)
             update_sql = f"""
@@ -583,6 +592,7 @@ class SubscriptionService:
                 SET subscription_status = 'cancelled',
                     updated_at = :now
                 WHERE {where_clause}
+                RETURNING id
             """
             self.db.execute_raw_sql(update_sql, params)
 

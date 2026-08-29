@@ -293,7 +293,8 @@ class TestMarkTrialUsed:
     async def test_mark_trial_success(self):
         """Marking trial as used succeeds with database."""
         mock_db = MagicMock()
-        mock_db.execute_raw_sql.return_value = []  # Update returns no rows
+        # RETURNING clause returns the updated row's id
+        mock_db.execute_raw_sql.return_value = [("user-uuid-123",)]
 
         service = SubscriptionService(db=mock_db)
         result = await service.mark_trial_used("+2348012345678")
@@ -303,6 +304,18 @@ class TestMarkTrialUsed:
         assert mock_db.execute_raw_sql.called
         call_args = mock_db.execute_raw_sql.call_args
         assert "trial_used_at" in call_args[0][0]
+        assert "RETURNING id" in call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_mark_trial_no_user_found(self):
+        """Marking trial returns False when user not found."""
+        mock_db = MagicMock()
+        mock_db.execute_raw_sql.return_value = []  # No rows updated
+
+        service = SubscriptionService(db=mock_db)
+        result = await service.mark_trial_used("+2348012345678")
+
+        assert result is False
 
 
 class TestValidateDateRange:
