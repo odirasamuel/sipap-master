@@ -1030,7 +1030,10 @@ Focus on your specialized analysis approach based on your role.
                         "market": prediction.get("market", "1X2"),
                         "outcome": prediction.get("outcome"),
                         "probability": float(prediction.get("probability", 0.0)),
-                        "confidence_score": float(prediction.get("confidence", 0.0)),
+                        # Normalize confidence: DB expects decimal (0-1), code may pass percentage (0-100)
+                        "confidence_score": float(prediction.get("confidence", 0.0)) / 100.0
+                        if float(prediction.get("confidence", 0.0)) > 1.0
+                        else float(prediction.get("confidence", 0.0)),
                         "ensemble_method": "weighted_average",
                         "generated_at": datetime.now(),
                     },
@@ -1041,7 +1044,9 @@ Focus on your specialized analysis approach based on your role.
                 for agent_pred in agent_predictions:
                     agent_name = agent_pred.get("agent")
                     agent_prob = agent_pred.get("prediction", {}).get("probability", 0.0)
-                    agent_conf = agent_pred.get("confidence", 0.0)
+                    # Normalize confidence: DB expects decimal (0-1), code may pass percentage (0-100)
+                    agent_conf_raw = agent_pred.get("confidence", 0.0)
+                    agent_conf = float(agent_conf_raw) / 100.0 if float(agent_conf_raw) > 1.0 else float(agent_conf_raw)
                     reasoning = {
                         "reasoning": agent_pred.get("reasoning", ""),
                         "evidence": agent_pred.get("evidence", []),
