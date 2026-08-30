@@ -143,7 +143,7 @@ class MarketEvaluator:
         ...     away_team_id=542,
         ...     league_id=140
         ... )
-        >>> top_3 = evaluator.get_top_markets(evaluations, top_n=3)
+        >>> top_5 = evaluator.get_top_markets(evaluations, top_n=5)
     """
 
     def __init__(self, data_mcp_client: Any):

@@ -1242,8 +1242,8 @@ class MainOrchestrator:
                 if first_selection.get("top_markets"):
                     # BATCH FORMAT: Each selection has top_markets list
                     top_markets = first_selection.get("top_markets", [])
-                    rank_icons = ["⭐", "2️⃣", "3️⃣"]
-                    for j, market in enumerate(top_markets[:3]):
+                    rank_icons = ["⭐", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
+                    for j, market in enumerate(top_markets[:5]):
                         icon = rank_icons[j] if j < len(rank_icons) else f"{j+1}."
                         outcome = market.get("best_outcome", "?")
                         odd = market.get("bookmaker_odd", 0)

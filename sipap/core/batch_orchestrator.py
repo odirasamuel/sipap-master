@@ -44,7 +44,7 @@ class BatchOrchestrator:
     Responsibilities:
     - Query fixtures with filters (leagues, dates, status)
     - Process in batches of 20 matches for optimal throughput
-    - Evaluate all 44 markets and select top 3 by probability
+    - Evaluate all 44 markets and select top 5 by probability
     - Apply quality gates (confidence + EV thresholds)
     - Cache results for 24 hours
     - Return selections with accumulated_sum >= target
@@ -84,7 +84,7 @@ class BatchOrchestrator:
 
         # Batch processing configuration
         self.BATCH_SIZE = 20  # Process 20 matches at a time
-        self.TOP_MARKETS = 3  # Return top 3 markets per fixture
+        self.TOP_MARKETS = 5  # Return top 5 markets per fixture (all evaluated markets)
         self.CACHE_TTL_HOURS = 24  # Cache predictions for 24 hours
 
         # Sequential processing with delay between fixtures
@@ -239,7 +239,7 @@ class BatchOrchestrator:
 
         Returns:
             Tuple of (accepted_selections, failed_count)
-            - accepted_selections: Fixtures that passed quality gates with top 3 markets
+            - accepted_selections: Fixtures that passed quality gates with top 5 markets
             - failed_count: Number of fixtures that failed prediction
 
         Example:
@@ -473,7 +473,7 @@ class BatchOrchestrator:
 
         # Step 3: Process fixtures in BATCHES OF 20 for efficiency
         # NOTE: Market selection happens INSIDE _predict_fixture now
-        # The system evaluates ALL markets and picks top 3 per fixture
+        # The system evaluates ALL markets and picks top 5 per fixture
         accumulated_sum = 0.0
         selections = []
         failed_predictions = 0
@@ -1245,7 +1245,7 @@ class BatchOrchestrator:
         # Strategy: Pick the most likely outcomes per fixture, not the highest value bets
         # This prioritizes accuracy (what will happen) over expected value (what's profitable)
         sorted_markets = sorted(market_predictions, key=lambda m: m["probability"], reverse=True)
-        top_markets = sorted_markets[:self.TOP_MARKETS]  # Top 3 by default
+        top_markets = sorted_markets[:self.TOP_MARKETS]  # Top 5 (all evaluated markets)
         best_market = top_markets[0]  # #1 is the BEST option (highlighted)
 
         # Log summary (INFO level - always visible)
@@ -1253,7 +1253,7 @@ class BatchOrchestrator:
         if self.cache_enabled and (cache_hits + cache_misses) > 0:
             cache_stats = f", cache: {cache_hits}H/{cache_misses}M ({cache_hits/(cache_hits+cache_misses)*100:.0f}%)"
 
-        # Log top 3 markets
+        # Log top 5 markets
         top_markets_summary = " | ".join([
             f"#{i+1} {m['market_code']}: {m['best_outcome']} @ {m['bookmaker_odd']} (prob={m['probability']:.2f})"
             for i, m in enumerate(top_markets)
@@ -1263,7 +1263,7 @@ class BatchOrchestrator:
             f"TOP {len(top_markets)}: {top_markets_summary}{cache_stats}"
         )
 
-        # Step 5: Return top 3 markets with best highlighted
+        # Step 5: Return top 5 markets with best highlighted
         return {
             "fixture": fixture,
             # NEW: Top 3 markets structure
