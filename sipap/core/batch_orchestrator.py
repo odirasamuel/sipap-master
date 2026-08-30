@@ -624,10 +624,27 @@ class BatchOrchestrator:
         thresholds = self.quality_thresholds.get(
             quality_threshold, self.quality_thresholds["high"]
         )
-        min_probability = thresholds["min_confidence"]
+
+        # When user explicitly requests specific markets, show ALL of them
+        # regardless of probability threshold (they asked for these markets)
+        # Only apply probability filter for "auto" market selection
+        if intent.markets and len(intent.markets) > 0:
+            # User explicitly requested these markets - show all evaluations
+            min_probability = 0.0
+            self.logger.info(
+                f"Explicit markets requested: {intent.markets}. "
+                "Showing all market evaluations (min_probability=0.0)"
+            )
+        else:
+            min_probability = thresholds["min_confidence"]
 
         # Determine top_n from intent
-        top_n = intent.num_matches or 10  # Default to 10 selections
+        # When explicit markets requested, increase top_n to show more results
+        if intent.markets and len(intent.markets) > 0:
+            # ~5 markets per fixture * num_fixtures = more selections needed
+            top_n = intent.num_matches * len(intent.markets) if intent.num_matches else 50
+        else:
+            top_n = intent.num_matches or 10  # Default to 10 selections
 
         # Get league IDs if leagues specified
         league_ids = None

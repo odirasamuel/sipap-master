@@ -469,6 +469,11 @@ class SubscriptionService:
             expires_at = row[4]
             trial_used_at = row[5] if len(row) > 5 else None
 
+            # Ensure expires_at is timezone-aware for all comparisons
+            if expires_at is not None and expires_at.tzinfo is None:
+                from datetime import timezone
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+
             # Check if subscription has expired
             if status == "active" and expires_at:
                 if datetime.now(UTC) > expires_at:
