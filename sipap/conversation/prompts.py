@@ -118,14 +118,65 @@ Your job is to parse user queries into structured intents for betting prediction
 - Advanced: MULTI_GOAL
 
 **Natural language aliases:**
-  - "both teams to score", "both score", "gg" -> "BTTS"
-  - "match result", "winner", "home win", "away win" -> "1X2"
+
+Main Markets:
+  - "both teams to score", "both score", "gg", "BTS", "GG" -> "BTTS"
+  - "match result", "winner", "home win", "away win", "straight win", "win" -> "1X2"
   - "double chance" -> "DC"
   - "draw no bet" -> "DNB"
-  - "over 2.5", "under 2.5", "over goals" -> "OU2.5"
-  - "over 1.5", "under 1.5" -> "OU1.5"
-  - "over 3.5", "under 3.5" -> "OU3.5"
+
+Goals Markets:
+  - "over 0.5", "under 0.5", "O0.5" -> "OU0.5"
+  - "over 1.5", "under 1.5", "O1.5" -> "OU1.5"
+  - "over 2.5", "under 2.5", "over goals", "O2.5" -> "OU2.5"
+  - "over 3.5", "under 3.5", "O3.5" -> "OU3.5"
+  - "over 4.5", "under 4.5", "O4.5" -> "OU4.5"
+
+Half-Time Markets:
+  - "HT", "HT result", "halftime result", "halftime 1x2" -> "HT_1X2"
+  - "HT DC", "HT Double Chance", "halftime double chance" -> "HT_DC"
+  - "HT O0.5", "HT over 0.5", "halftime over 0.5" -> "HT_OU0.5"
+  - "HT O1.5", "HT over 1.5", "halftime over 1.5" -> "HT_OU1.5"
+  - "HT O2.5", "HT over 2.5", "halftime over 2.5" -> "HT_OU2.5"
+
+2nd Half Markets:
+  - "2H DC", "2H Double Chance", "second half double chance" -> "2H_DC"
+  - "2H O0.5", "2H over 0.5", "second half over 0.5" -> "2H_OU0.5"
+  - "2H O1.5", "2H over 1.5", "second half over 1.5" -> "2H_OU1.5"
+  - "2H O2.5", "2H over 2.5", "second half over 2.5" -> "2H_OU2.5"
+
+Team Markets:
+  - "Home to Score", "Home Over 0.5", "Home O0.5", "home team to score" -> "HOME_SCORE"
+  - "Away to Score", "Away Over 0.5", "Away O0.5", "away team to score" -> "AWAY_SCORE"
+  - "Home win either half", "home to win either half" -> "HOME_WIN_HALF"
+  - "Away win either half", "away to win either half" -> "AWAY_WIN_HALF"
+
+Combo Markets (AND logic - BOTH conditions must be true):
+  - "1&O1.5", "1nO1.5", "1 and O1.5", "win and over 1.5" -> "1X2_OU1.5"
+  - "1&O2.5", "1nO2.5", "1 and O2.5", "win and over 2.5" -> "1X2_OU2.5"
+  - "1&O3.5", "1nO3.5", "1 and O3.5", "win and over 3.5" -> "1X2_OU3.5"
+  - "1&O4.5", "1nO4.5", "1 and O4.5", "win and over 4.5" -> "1X2_OU4.5"
+  - "Win & BTS", "Win & GG", "Results & BTS", "Results & GG", "Match Winner & BTS", "Match Winner & GG", "Win and BTS", "Win and GG", "Results and BTS", "Results and GG", "Match Winner and BTS", "Match Winner and GG" -> "1X2_BTTS"
+  - "DC&O1.5", "DCnO1.5", "DC and O1.5", "double chance and over 1.5" -> "DC_OU1.5"
+  - "DC&O2.5", "DCnO2.5", "DC and O2.5", "double chance and over 2.5" -> "DC_OU2.5"
+  - "DC&O3.5", "DCnO3.5", "DC and O3.5", "double chance and over 3.5" -> "DC_OU3.5"
+  - "DC&BTS", "DC&GG", "DCnBTS", "DCnGG", "DC and BTS", "DC and GG", "double chance and btts" -> "DC_BTTS"
+  - "BTS&O2.5", "BTSnO2.5", "BTS and O2.5", "GG&O2.5", "GGnO2.5", "GG and O2.5", "btts and over 2.5" -> "BTTS_OU2.5"
+  - "BTS&O3.5", "BTSnO3.5", "BTS and O3.5", "GG&O3.5", "GGnO3.5", "GG and O3.5", "btts and over 3.5" -> "BTTS_OU3.5"
+
 - Multiple markets: "BTTS and over 2.5" -> ["BTTS", "OU2.5"]
+
+**Chance Mix aliases (OR logic - EITHER condition wins):**
+  - "chance mix 1.5", "home win or over 1.5", "away win or over 1.5", "draw or over 1.5", "1x2 or total 1.5", "result or 2+ goals", "Chance Mix Win or O1.5", "Win or O1.5", "Match Winner or O1.5" -> "CHANCEMIX_1X2_OU15"
+  - "chance mix 2.5", "home win or over 2.5", "away win or over 2.5", "draw or over 2.5", "1x2 or total 2.5", "result or 3+ goals", "Chance Mix Win or O2.5", "Win or O2.5", "Match Winner or O2.5" -> "CHANCEMIX_1X2_OU25"
+  - "chance mix 3.5", "home win or over 3.5", "away win or over 3.5", "draw or over 3.5", "1x2 or total 3.5", "result or 4+ goals", "Chance Mix Win or O3.5", "Win or O3.5", "Match Winner or O3.5" -> "CHANCEMIX_1X2_OU35"
+  - "chance mix btts", "home win or btts", "away win or btts", "draw or btts", "1x2 or gg", "result or both score", "Chance Mix Win or BTS", "Chance Mix Win or GG", "Win or BTS", "Win or GG", "Match Winner or BTS", "Match Winner or GG" -> "CHANCEMIX_1X2_BTTS"
+  - "gg or 1.5", "btts or over 1.5", "both score or 2+ goals", "btts or 2+ goals", "Chance Mix GG or O1.5", "Chance Mix BTS or O1.5", "GG or O1.5", "BTS or O1.5" -> "CHANCEMIX_BTTS_OU15"
+  - "gg or 2.5", "btts or over 2.5", "both score or 3+ goals", "btts or 3+ goals", "Chance Mix GG or O2.5", "Chance Mix BTS or O2.5", "GG or O2.5", "BTS or O2.5" -> "CHANCEMIX_BTTS_OU25"
+  - "gg or 3.5", "btts or over 3.5", "both score or 4+ goals", "btts or 4+ goals", "Chance Mix GG or O3.5", "Chance Mix BTS or O3.5", "GG or O3.5", "BTS or O3.5" -> "CHANCEMIX_BTTS_OU35"
+
+Advanced Markets:
+  - "Total goals", "MG", "multi goal", "goal range" -> "MULTI_GOAL"
 
 **CRITICAL RULE:**
 - If user says vague things like "sure odds", "good bets" WITHOUT specific markets -> set markets=null
