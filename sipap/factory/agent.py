@@ -130,14 +130,16 @@ class AgentToolFactory:
             max_tokens=model_config.get("max_tokens", 4096),
             temperature=model_config.get("temperature", 0.1),
             # System prompt caching enabled - saves ~70-80% tokens
-            # cache_tools REMOVED: Bedrock inference profiles reject 'auto' for tool cachePoint.type
-            # Error was: Value 'auto' at 'toolConfig.tools.49.member.cachePoint.type'
-            # Only system prompt is cached, not tool definitions
             cache_config=CacheConfig(
                 strategy="auto",  # Automatically detect and inject cache points
                 ttl="1h",         # Cache for 1 hour (default is 5 minutes)
             ),
-            # cache_tools="auto",  # DISABLED - causes ValidationException on inference profiles
+            # Re-enabled 2026-09-03: MODEL_ID switched from cross-region inference profile
+            # (us.anthropic.claude-sonnet-4-5-20250929-v1:0) to direct regional model
+            # (anthropic.claude-sonnet-4-5-20250929-v1:0). Inference profiles rejected
+            # cache_tools="auto" with: Value 'auto' at 'toolConfig.tools.49.member.cachePoint.type'
+            # Direct regional model supports tool definition caching (~1K-5K tokens per agent call).
+            cache_tools="auto",
         )
 
     def _create_output_model(self, output_schema: dict[str, Any]) -> type[BaseModel] | None:

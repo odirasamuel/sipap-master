@@ -23,6 +23,54 @@ from jinja2 import Environment
 from sipap.core.mcp_client import MCPClient
 
 
+# Tool result size limits — prevent context bloat in Bedrock agent calls.
+# Each oversized tool result adds uncacheable tokens that multiply across fixtures.
+# 8,000 chars ≈ 2,000 tokens (at 4 chars/token). Applied per-tool-call.
+_MAX_TOOL_RESULT_CHARS = 8000
+# Any list inside a tool result is capped at this many items.
+# Catches match history, H2H records, standings, odds arrays, etc.
+_MAX_LIST_ITEMS_IN_RESULT = 10
+
+
+def _truncate_large_result(value: Any, max_items: int = _MAX_LIST_ITEMS_IN_RESULT) -> tuple[Any, bool]:
+    """Recursively cap list sizes inside tool results to limit context size.
+
+    Only truncates lists — preserves dict structure and scalar values.
+    Returns (truncated_value, was_truncated).
+
+    Args:
+        value: Tool result value (any type)
+        max_items: Maximum items to keep in any list
+
+    Returns:
+        Tuple of (possibly truncated value, bool indicating if truncation occurred)
+    """
+    if isinstance(value, list):
+        if len(value) > max_items:
+            truncated_items = [_truncate_large_result(item, max_items)[0] for item in value[:max_items]]
+            return truncated_items, True
+        else:
+            new_list: list[Any] = []
+            any_truncated = False
+            for item in value:
+                new_item, item_truncated = _truncate_large_result(item, max_items)
+                new_list.append(new_item)
+                if item_truncated:
+                    any_truncated = True
+            return new_list, any_truncated
+    elif isinstance(value, dict):
+        new_dict: dict[str, Any] = {}
+        any_truncated = False
+        for k, v in value.items():
+            new_v, v_truncated = _truncate_large_result(v, max_items)
+            new_dict[k] = new_v
+            if v_truncated:
+                any_truncated = True
+        return new_dict, any_truncated
+    else:
+        return value, False
+
+
 def _strip_html_from_value(value: Any) -> Any:
     """
     Recursively strip HTML tags from string values in dicts/lists.
@@ -456,6 +504,23 @@ class MCPFactory:
                         # This handles cases where MCP returns HTML content that
                         # Strands misinterprets as content types (e.g., <P>)
                         sanitized_result = _strip_html_from_value(result)
+
+                        # Cap result size to prevent context bloat.
+                        # Only triggers when the JSON representation exceeds the threshold.
+                        # Lists (match history, H2H, standings) are capped at 10 items.
+                        import json as _json
+                        result_size = len(_json.dumps(sanitized_result, default=str))
+                        if result_size > _MAX_TOOL_RESULT_CHARS:
+                            truncated, was_truncated = _truncate_large_result(sanitized_result)
+                            if was_truncated:
+                                new_size = len(_json.dumps(truncated, default=str))
+                                self.logger.info(
+                                    f"Tool result truncated: {server}.{name} "
+                                    f"({result_size} → {new_size} chars, "
+                                    f"~{result_size // 4} → ~{new_size // 4} tokens saved)"
+                                )
+                                sanitized_result = truncated
+
                         return sanitized_result
                     except Exception as e:
                         self.logger.error(

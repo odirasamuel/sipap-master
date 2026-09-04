@@ -56,11 +56,16 @@ class ClaudeNLUClient:
         self.region = region
         self.logger = logger or get_logger(__name__)
 
-        # Use inference profile ARN from environment if available, fallback to model_id parameter
-        # Bedrock requires inference profile ARN, not model ID directly
+        # NLU uses a cheaper model than prediction agents.
+        # Priority: explicit model_id arg → NLU_MODEL_ID env var → BEDROCK_PROFILE_ARN → default Haiku.
+        # NLU_MODEL_ID defaults to Haiku 3.5 ($0.80/M vs Sonnet $3/M, 73% cheaper).
+        # Intent parsing, clarification, and suggestions do not require Sonnet-level reasoning.
         self.model_id = model_id or os.getenv(
-            "BEDROCK_PROFILE_ARN",
-            "anthropic.claude-sonnet-4-5-20250929-v1:0"
+            "NLU_MODEL_ID",
+            os.getenv(
+                "BEDROCK_PROFILE_ARN",
+                "anthropic.claude-haiku-3-5-20241022-v1:0"
+            )
         )
 
         # Initialize Bedrock runtime client
