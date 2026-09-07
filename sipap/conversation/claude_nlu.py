@@ -64,7 +64,7 @@ class ClaudeNLUClient:
             "NLU_MODEL_ID",
             os.getenv(
                 "BEDROCK_PROFILE_ARN",
-                "anthropic.claude-3-5-haiku-20241022-v1:0"
+                "us.anthropic.claude-3-5-haiku-20241022-v1:0"  # direct regional is EOL; use inference profile
             )
         )
 
