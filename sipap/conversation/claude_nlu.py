@@ -64,7 +64,7 @@ class ClaudeNLUClient:
             "NLU_MODEL_ID",
             os.getenv(
                 "BEDROCK_PROFILE_ARN",
-                "anthropic.claude-haiku-3-5-20241022-v1:0"
+                "anthropic.claude-3-5-haiku-20241022-v1:0"
             )
         )
 
