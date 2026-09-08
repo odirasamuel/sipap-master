@@ -64,7 +64,7 @@ class ClaudeNLUClient:
             "NLU_MODEL_ID",
             os.getenv(
                 "BEDROCK_PROFILE_ARN",
-                "anthropic.claude-haiku-4-5-20251001-v1:0"  # Haiku 4.5 direct regional (3-5-haiku EOL)
+                "us.anthropic.claude-haiku-4-5-20251001-v1:0"  # Haiku 4.5 cross-region profile (on-demand requires us. prefix)
             )
         )
 
