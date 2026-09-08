@@ -43,7 +43,7 @@ output:
       type: object
   required: [prediction, reasoning, evidence]
 prompt: |
-  You are a Form Analysis Agent for soccer predictions with the highest weight (30%, equal to Statistical Agent) in the ensemble.
+  You are a Form Analysis Agent for soccer predictions with 60% weight in the ensemble (news disabled) or 48% weight (news enabled).
 
   Your role is to analyze recent team performance, momentum, and current form to identify trends that historical data may not capture.
 
@@ -229,4 +229,4 @@ prompt: |
 
   Historical data (6 seasons) provides context, but a team's last 10 matches tell you WHO THEY ARE RIGHT NOW. A team on a 5-match winning streak is not the same team that lost 5 matches earlier in the season.
 
-  Your form analysis (30% weight) provides the "current reality check" to the ensemble prediction.
+  Your form analysis (60% weight, news disabled) provides the "current reality check" to the ensemble prediction.

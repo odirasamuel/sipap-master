@@ -765,7 +765,7 @@ class MarketEvaluator:
         ftr_data = tool_data.get("h2h_ftr", ToolData())
         if ftr_data.is_valid:
             data = ftr_data.data
-            wp = data.get("weighted_probabilities", {})
+            wp = data.get("blended_probabilities", data.get("weighted_probabilities", {}))
             quality = self._get_quality(data)
 
             outcomes = [
@@ -838,7 +838,7 @@ class MarketEvaluator:
             data = bts_data.data
             quality = self._get_quality(data)
             bts_prob = data.get("bts_probability", 0)
-            weighted_bts = data.get("weighted_bts_probability", bts_prob)
+            weighted_bts = data.get("blended_bts_probability", data.get("weighted_bts_probability", bts_prob))
 
             outcomes = [
                 MarketOutcome("Yes", bts_prob, weighted_bts, quality),
@@ -861,7 +861,7 @@ class MarketEvaluator:
         dc_away = tool_data.get("double_chance_away", ToolData())
         if dc_home.is_valid and dc_away.is_valid and ftr_data.is_valid:
             ftr = ftr_data.data
-            wp = ftr.get("weighted_probabilities", {})
+            wp = ftr.get("blended_probabilities", ftr.get("weighted_probabilities", {}))
             quality = self._get_quality(ftr)
 
             # 1X = P(Home) + P(Draw)
@@ -875,10 +875,13 @@ class MarketEvaluator:
             # 1X and X2 include draws, making them safer bets
             p_12_adjusted = p_12 * DC_12_PENALTY_FACTOR
 
+            dc_home_prob = dc_home.data.get("blended_probability", dc_home.data.get("weighted_probability", p_1x))
+            dc_away_prob = dc_away.data.get("blended_probability", dc_away.data.get("weighted_probability", p_x2))
+
             outcomes = [
-                MarketOutcome("1X", p_1x, dc_home.data.get("weighted_probability", p_1x), quality),
+                MarketOutcome("1X", p_1x, dc_home_prob, quality),
                 MarketOutcome("12", p_12, p_12_adjusted, quality),  # Use adjusted prob for selection
-                MarketOutcome("X2", p_x2, dc_away.data.get("weighted_probability", p_x2), quality),
+                MarketOutcome("X2", p_x2, dc_away_prob, quality),
             ]
             evaluations.append(
                 MarketEvaluation(
@@ -898,13 +901,14 @@ class MarketEvaluator:
             data = goals_data.data
             quality = self._get_quality(data)
             over_thresholds = data.get("over_thresholds", {})
-            weighted_probs = data.get("weighted_probabilities", {})
+            # Prefer blended_probabilities (form-adjusted), fall back to weighted, then raw
+            blended_probs_goals = data.get("blended_probabilities", data.get("weighted_probabilities", {}))
 
             for threshold in [0.5, 1.5, 2.5, 3.5, 4.5]:
                 threshold_key = f"over_{threshold}"
                 over_data = over_thresholds.get(threshold_key, {})
                 over_prob = over_data.get("probability", 0)
-                weighted_over = weighted_probs.get(f"over_{threshold}", over_prob)
+                weighted_over = blended_probs_goals.get(f"over_{threshold}", over_prob)
 
                 outcomes = [
                     MarketOutcome(f"Over {threshold}", over_prob, weighted_over, quality),
@@ -932,7 +936,7 @@ class MarketEvaluator:
         ht_result = tool_data.get("ht_result", ToolData())
         if ht_result.is_valid:
             data = ht_result.data
-            wp = data.get("weighted_probabilities", {})
+            wp = data.get("blended_probabilities", data.get("weighted_probabilities", {}))
             quality = self._get_quality(data)
 
             home_ht = data.get("home_leading_ht_probability", 0)
@@ -984,14 +988,16 @@ class MarketEvaluator:
             data = ht_goals.data
             quality = self._get_quality(data)
             total_ht = data.get("total_ht_goals", {})
+            blended_ht = data.get("blended_total_ht_goals", total_ht)
 
             for threshold in [0.5, 1.5, 2.5]:
                 over_key = f"over_{threshold}"
                 over_prob = total_ht.get(over_key, 0)
+                weighted_over_ht = blended_ht.get(over_key, over_prob)
 
                 outcomes = [
-                    MarketOutcome(f"Over {threshold}", over_prob, over_prob, quality),
-                    MarketOutcome(f"Under {threshold}", 1 - over_prob, 1 - over_prob, quality),
+                    MarketOutcome(f"Over {threshold}", over_prob, weighted_over_ht, quality),
+                    MarketOutcome(f"Under {threshold}", 1 - over_prob, 1 - weighted_over_ht, quality),
                 ]
                 evaluations.append(
                     MarketEvaluation(
@@ -1015,7 +1021,7 @@ class MarketEvaluator:
         result_2h = tool_data.get("2h_result", ToolData())
         if result_2h.is_valid:
             data = result_2h.data
-            wp = data.get("weighted_probabilities", {})
+            wp = data.get("blended_probabilities", data.get("weighted_probabilities", {}))
             quality = self._get_quality(data)
 
             home_2h = data.get("home_win_2h_probability", 0)
@@ -1049,14 +1055,16 @@ class MarketEvaluator:
             data = goals_2h.data
             quality = self._get_quality(data)
             total_2h = data.get("total_2h_goals", {})
+            blended_2h = data.get("blended_total_2h_goals", total_2h)
 
             for threshold in [0.5, 1.5, 2.5]:
                 over_key = f"over_{threshold}"
                 over_prob = total_2h.get(over_key, 0)
+                weighted_over_2h = blended_2h.get(over_key, over_prob)
 
                 outcomes = [
-                    MarketOutcome(f"Over {threshold}", over_prob, over_prob, quality),
-                    MarketOutcome(f"Under {threshold}", 1 - over_prob, 1 - over_prob, quality),
+                    MarketOutcome(f"Over {threshold}", over_prob, weighted_over_2h, quality),
+                    MarketOutcome(f"Under {threshold}", 1 - over_prob, 1 - weighted_over_2h, quality),
                 ]
                 evaluations.append(
                     MarketEvaluation(
@@ -1079,12 +1087,20 @@ class MarketEvaluator:
         evaluations: list[MarketEvaluation] = []
 
         # Markets 19, 23: HOME_SCORE / HOME_TO_SCORE
+        # Group C: Blend H2H tool (40%) with team form from home_goals tool (60%)
         home_score = tool_data.get("home_to_score", ToolData())
+        home_goals_td = tool_data.get("home_goals", ToolData())
         if home_score.is_valid:
             data = home_score.data
             quality = self._get_quality(data)
             prob = data.get("home_to_score_probability", 0)
-            weighted = data.get("weighted_probability", prob)
+            h2h_weighted = data.get("weighted_probability", prob)
+            # Form signal: team's recent home goals (over 0.5 = scored)
+            form_prob_h = (
+                home_goals_td.data.get("weighted_over_thresholds", {}).get("over_0.5", h2h_weighted)
+                if home_goals_td.is_valid else h2h_weighted
+            )
+            weighted = round(h2h_weighted * 0.40 + form_prob_h * 0.60, 4)
 
             outcomes = [
                 MarketOutcome("Yes", prob, weighted, quality),
@@ -1105,12 +1121,20 @@ class MarketEvaluator:
                 )
 
         # Markets 20, 24: AWAY_SCORE / AWAY_TO_SCORE
+        # Group C: Blend H2H tool (40%) with team form from away_goals tool (60%)
         away_score = tool_data.get("away_to_score", ToolData())
+        away_goals_td = tool_data.get("away_goals", ToolData())
         if away_score.is_valid:
             data = away_score.data
             quality = self._get_quality(data)
             prob = data.get("away_to_score_probability", 0)
-            weighted = data.get("weighted_probability", prob)
+            h2h_weighted_a = data.get("weighted_probability", prob)
+            # Form signal: team's recent away goals (over 0.5 = scored)
+            form_prob_a = (
+                away_goals_td.data.get("weighted_over_thresholds", {}).get("over_0.5", h2h_weighted_a)
+                if away_goals_td.is_valid else h2h_weighted_a
+            )
+            weighted = round(h2h_weighted_a * 0.40 + form_prob_a * 0.60, 4)
 
             outcomes = [
                 MarketOutcome("Yes", prob, weighted, quality),
@@ -1134,13 +1158,15 @@ class MarketEvaluator:
         home_half = tool_data.get("home_either_half", ToolData())
         if home_half.is_valid:
             data = home_half.data
-            probs = data.get("weighted_probabilities", data.get("probabilities", {}))
             quality = self._get_quality(data)
-            prob = probs.get("win_either_half", 0)
+            wp_half = data.get("weighted_probabilities", data.get("probabilities", {}))
+            blended_half = data.get("blended_probabilities", wp_half)
+            raw_prob = wp_half.get("win_either_half", 0)
+            prob = blended_half.get("win_either_half", raw_prob)
 
             outcomes = [
-                MarketOutcome("Yes", prob, prob, quality),
-                MarketOutcome("No", 1 - prob, 1 - prob, quality),
+                MarketOutcome("Yes", raw_prob, prob, quality),
+                MarketOutcome("No", 1 - raw_prob, 1 - prob, quality),
             ]
             evaluations.append(
                 MarketEvaluation(
@@ -1158,13 +1184,15 @@ class MarketEvaluator:
         away_half = tool_data.get("away_either_half", ToolData())
         if away_half.is_valid:
             data = away_half.data
-            probs = data.get("weighted_probabilities", data.get("probabilities", {}))
             quality = self._get_quality(data)
-            prob = probs.get("win_either_half", 0)
+            wp_half_a = data.get("weighted_probabilities", data.get("probabilities", {}))
+            blended_half_a = data.get("blended_probabilities", wp_half_a)
+            raw_prob_a = wp_half_a.get("win_either_half", 0)
+            prob_a = blended_half_a.get("win_either_half", raw_prob_a)
 
             outcomes = [
-                MarketOutcome("Yes", prob, prob, quality),
-                MarketOutcome("No", 1 - prob, 1 - prob, quality),
+                MarketOutcome("Yes", raw_prob_a, prob_a, quality),
+                MarketOutcome("No", 1 - raw_prob_a, 1 - prob_a, quality),
             ]
             evaluations.append(
                 MarketEvaluation(
@@ -1195,13 +1223,15 @@ class MarketEvaluator:
                 ht = item.get("halftime", "")
                 ft = item.get("fulltime", "")
                 prob = item.get("probability", 0)
+                # Use blended_probability if available (form-adjusted), else raw
+                weighted_prob = item.get("blended_probability", prob)
 
                 # Map to standard codes: 1=Home, X=Draw, 2=Away
                 ht_code = {"Home": "1", "Draw": "X", "Away": "2"}.get(ht, "X")
                 ft_code = {"Home": "1", "Draw": "X", "Away": "2"}.get(ft, "X")
                 code = f"{ht_code}/{ft_code}"
 
-                outcomes.append(MarketOutcome(code, prob, prob, quality))
+                outcomes.append(MarketOutcome(code, prob, weighted_prob, quality))
 
             if outcomes:
                 evaluations.append(
@@ -1242,8 +1272,9 @@ class MarketEvaluator:
 
         ftr = ftr_data.data
         goals = goals_data.data
-        wp_ftr = ftr.get("weighted_probabilities", {})
-        wp_goals = goals.get("weighted_probabilities", {})
+        # Prefer blended (form-adjusted) over weighted for both ftr and goals
+        wp_ftr = ftr.get("blended_probabilities", ftr.get("weighted_probabilities", {}))
+        wp_goals = goals.get("blended_probabilities", goals.get("weighted_probabilities", {}))
         quality = self._get_quality(ftr)
         matches = ftr.get("total_matches", 0)
         seasons = ftr_data.metadata.get("seasons_analyzed", 0)
@@ -1285,7 +1316,7 @@ class MarketEvaluator:
         # Market 30: 1X2_BTTS (AND logic)
         if bts_data.is_valid:
             bts = bts_data.data
-            p_gg = bts.get("weighted_bts_probability", bts.get("bts_probability", 0))
+            p_gg = bts.get("blended_bts_probability", bts.get("weighted_bts_probability", bts.get("bts_probability", 0)))
             p_ng = 1 - p_gg
 
             outcomes = [
@@ -1341,7 +1372,7 @@ class MarketEvaluator:
         # Market 34: DC_BTTS (AND logic)
         if bts_data.is_valid:
             bts = bts_data.data
-            p_gg = bts.get("weighted_bts_probability", bts.get("bts_probability", 0))
+            p_gg = bts.get("blended_bts_probability", bts.get("weighted_bts_probability", bts.get("bts_probability", 0)))
             p_ng = 1 - p_gg
 
             outcomes = [
@@ -1367,7 +1398,7 @@ class MarketEvaluator:
         # Markets 35-36: BTTS & Total Goals (AND logic)
         if bts_data.is_valid:
             bts = bts_data.data
-            p_gg = bts.get("weighted_bts_probability", bts.get("bts_probability", 0))
+            p_gg = bts.get("blended_bts_probability", bts.get("weighted_bts_probability", bts.get("bts_probability", 0)))
             p_ng = 1 - p_gg
 
             for threshold in [2.5, 3.5]:
@@ -1415,8 +1446,9 @@ class MarketEvaluator:
 
         ftr = ftr_data.data
         goals = goals_data.data
-        wp_ftr = ftr.get("weighted_probabilities", {})
-        wp_goals = goals.get("weighted_probabilities", {})
+        # Prefer blended (form-adjusted) over weighted for both ftr and goals
+        wp_ftr = ftr.get("blended_probabilities", ftr.get("weighted_probabilities", {}))
+        wp_goals = goals.get("blended_probabilities", goals.get("weighted_probabilities", {}))
         quality = self._get_quality(ftr)
         matches = ftr.get("total_matches", 0)
         seasons = ftr_data.metadata.get("seasons_analyzed", 0)
@@ -1488,7 +1520,7 @@ class MarketEvaluator:
         # Market 40: CHANCEMIX_1X2_BTTS (OR logic)
         if bts_data.is_valid:
             bts = bts_data.data
-            p_gg = bts.get("weighted_bts_probability", bts.get("bts_probability", 0))
+            p_gg = bts.get("blended_bts_probability", bts.get("weighted_bts_probability", bts.get("bts_probability", 0)))
             p_ng = 1 - p_gg
 
             outcomes = [
@@ -1514,7 +1546,7 @@ class MarketEvaluator:
         # Markets 41-43: BTTS OR Total Goals (OR logic)
         if bts_data.is_valid:
             bts = bts_data.data
-            p_gg = bts.get("weighted_bts_probability", bts.get("bts_probability", 0))
+            p_gg = bts.get("blended_bts_probability", bts.get("weighted_bts_probability", bts.get("bts_probability", 0)))
             p_ng = 1 - p_gg
 
             for threshold in [1.5, 2.5, 3.5]:
@@ -1570,7 +1602,8 @@ class MarketEvaluator:
             data = goals_range.data
             quality = self._get_quality(data)
             dist = data.get("goal_distribution", {})
-            wp = data.get("weighted_probabilities", dist)
+            # Prefer blended_probabilities (form-adjusted), fall back to weighted, then raw dist
+            wp = data.get("blended_probabilities", data.get("weighted_probabilities", dist))
 
             # Build outcomes for each goal range
             outcomes = []
