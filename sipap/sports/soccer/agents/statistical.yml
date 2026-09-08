@@ -105,11 +105,26 @@ prompt: |
 
   Recent data is more predictive than historical data.
 
+  ## Which Probability Fields to Use From Tool Responses:
+
+  Tools return multiple probability fields. You must use the correct ones:
+
+  - **Use `weighted_*` fields** (e.g., `weighted_bts_probability`, `weighted_probabilities.home_win`).
+    These are recency-weighted H2H probabilities (50/30/20 split) — your core statistical input.
+  - **Use raw counts / `current_form`** to apply your own recency judgement on top.
+  - **DO NOT use `blended_*` fields** (e.g., `blended_bts_probability`, `blended_probabilities`).
+    These already mix form into the H2H figure for the batch evaluator. Using them here would
+    double-count form: once inside the tool and again when the orchestrator weights your output
+    at 40% alongside the Form Agent (60%).
+
+  Your job is to provide the pure historical/statistical signal. The Form Agent (60%) provides the
+  form signal. The orchestrator blends the two. Keep them separate.
+
   ## Process:
 
   1. **Gather Historical Data (6 Seasons):**
      - Use appropriate get_* tools based on the market you're analyzing
-     - All tools return individual probabilities for each condition
+     - Read `weighted_*` fields and raw probabilities — NOT `blended_*` fields
      - Tools account for home/away context automatically
 
   2. **Apply Recency Weighting:**
